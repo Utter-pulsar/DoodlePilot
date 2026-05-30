@@ -1,0 +1,11 @@
+node_modules/
+out/
+dist/
+tmp/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+# generated sprite working files (keep final committed assets, ignore scratch)
+assets/**/_scratch/

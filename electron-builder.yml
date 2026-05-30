@@ -1,0 +1,76 @@
+appId: com.doodlepilot.app
+productName: DoodlePilot
+copyright: Copyright © 2026 DoodlePilot
+
+directories:
+  buildResources: build
+  output: dist
+
+# Exclusion-style (electron-vite convention): keeps out/, package.json AND the
+# production node_modules (sql.js, croner, @electron-toolkit/utils) which the main
+# process requires at runtime. Only source/config junk is stripped.
+files:
+  - '!**/.vscode/*'
+  - '!{.eslintrc,.eslintrc.cjs,.prettierrc,.prettierignore,.editorconfig}'
+  - '!{.env,.env.*,.npmrc}'
+  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json,electron.vite.config.ts}'
+  - '!{README.md,README.zh-CN.md,PROJECT_PLAN.md}'
+  - '!src/*'
+  - '!tailwind.config.js'
+  - '!postcss.config.js'
+
+# Runtime art (sprites generated via Codex) is shipped as extra resources so it can be
+# updated without rebundling the renderer. Read at runtime from process.resourcesPath.
+extraResources:
+  - from: assets
+    to: assets
+    filter:
+      - "**/*"
+
+# The sql.js WASM must be readable from disk at runtime; keep it outside the asar.
+asarUnpack:
+  - resources/**
+  - "**/sql-wasm.wasm"
+
+win:
+  target:
+    - nsis
+  # build/icon.ico  (256x256 multi-size .ico — generated from the Codex plane icon)
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+  artifactName: ${productName}-${version}-setup.${ext}
+
+mac:
+  target:
+    # build BOTH Apple Silicon (arm64) and Intel (x64) — a cross-build works fine on a
+    # GitHub macos runner (electron-builder downloads each arch's Electron binary).
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+    - target: zip
+      arch:
+        - arm64
+        - x64
+  category: public.app-category.productivity
+  # build/icon.icns
+  # For notarization, set CSC_LINK / CSC_KEY_PASSWORD + APPLE_ID secrets in CI.
+
+dmg:
+  # ${arch} keeps the Intel and Apple-Silicon dmgs from overwriting each other
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Utility
+  # build/icon.png  (512x512)
+
+appImage:
+  artifactName: ${productName}-${version}.${ext}
+
+publish: null

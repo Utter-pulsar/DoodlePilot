@@ -1,0 +1,108 @@
+@import url('https://fonts.googleapis.com/css2?family=Kalam:wght@300;400;700&family=Patrick+Hand&display=swap');
+
+/* Primary hand-drawn face. Drop Excalifont-Regular.woff2 into public/fonts/ (see its
+   README). Until then, the fallbacks above keep the look hand-drawn. */
+@font-face {
+  font-family: 'Excalifont';
+  src: url('/fonts/Excalifont-Regular.woff2') format('woff2');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Chinese handwriting face. Excalifont has no CJK glyphs, so the stack falls back
+   to Xiaolai for Chinese — English/numbers stay Excalifont, 中文 uses 小赖. */
+@font-face {
+  font-family: 'Xiaolai';
+  src: url('/fonts/Xiaolai-Regular.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Theme tokens. Channels are space-separated RGB so Tailwind's `/<alpha>` works
+   (e.g. border-ink/80). Dark mode = `.dark` class on <html> (set by the store). */
+:root {
+  --paper: 251 247 239;
+  --ink: 43 43 43;
+  --card: 255 255 255;
+  --card-muted: 240 237 230;
+  --card-done: 239 252 235;
+  --grain: rgba(43, 43, 43, 0.05);
+  --shadow: rgba(43, 43, 43, 0.85);
+}
+:root.dark {
+  --paper: 26 22 18;
+  --ink: 232 228 219;
+  --card: 42 36 32;
+  --card-muted: 21 18 14;
+  --card-done: 42 61 26;
+  --grain: rgba(232, 228, 219, 0.07);
+  --shadow: rgba(0, 0, 0, 0.55);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    margin: 0;
+    font-family: theme('fontFamily.doodle');
+    color: rgb(var(--ink));
+    /* paper grain: faint dotted texture over a warm paper base */
+    background-color: rgb(var(--paper));
+    background-image: radial-gradient(var(--grain) 1px, transparent 1px);
+    background-size: 18px 18px;
+    -webkit-font-smoothing: antialiased;
+    /* app-like feel: text isn't selectable... */
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  /* ...except where you actually type */
+  input,
+  textarea,
+  [contenteditable='true'] {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+}
+
+@layer components {
+  /* Apply to any straight-edged element to give it a hand-drawn wobble.
+     Powered by the SVG turbulence filter defined in <DoodleFilter />. */
+  .doodle-edge {
+    filter: url(#doodle-wobble);
+  }
+
+  .doodle-card {
+    @apply rounded-[14px] border-2 border-ink bg-card/80 shadow-doodle;
+  }
+
+  .doodle-chip {
+    @apply inline-flex items-center gap-1 rounded-full border-2 border-ink px-2 py-0.5 text-sm;
+  }
+}
+
+/* Frameless main window: only the header bar drags the window; controls opt out. */
+.app-drag {
+  -webkit-app-region: drag;
+}
+.app-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* thin doodle scrollbars */
+::-webkit-scrollbar {
+  height: 10px;
+  width: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--ink) / 0.4);
+  border-radius: 8px;
+}

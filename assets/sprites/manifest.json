@@ -1,0 +1,17 @@
+{
+  "$comment": "Sprite registry (documentation; the overlay loader currently uses static imports). 'grid' = [columns, rows]; omit for single-frame. Paths are relative to assets/. Banner is now drawn in code (Rough.js), no image.",
+  "sprites": {
+    "rocket.classic": { "file": "sprites/rocket/rocket-classic.png" },
+    "rocket.dismount": { "file": "sprites/rocket/rocket-dismount.png", "grid": [4, 4], "fps": 12 },
+    "rocket.fly": { "file": "sprites/rocket/rocket-fly.png", "grid": [4, 4], "fps": 12 },
+    "transport.rig": { "file": "sprites/rig/transport-rig.png", "grid": [2, 2], "fps": 12 },
+    "car": { "file": "sprites/car/car.png" },
+    "tractor": { "file": "sprites/car/tractor.png", "grid": [4, 2], "fps": 12 },
+    "plane.fly": { "file": "sprites/plane/plane-fly.png", "grid": [4, 2], "fps": 12 },
+    "platform": { "file": "sprites/platform/platform.png" },
+    "firework.a": { "file": "sprites/firework/firework-a.png", "grid": [4, 4], "fps": 16 },
+    "firework.b": { "file": "sprites/firework/firework-b.png", "grid": [4, 4], "fps": 16 },
+    "firework.c": { "file": "sprites/firework/firework-c.png", "grid": [4, 4], "fps": 16 },
+    "smoke": { "file": "sprites/smoke/smoke.png", "grid": [4, 2], "fps": 12 }
+  }
+}
