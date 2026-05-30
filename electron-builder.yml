@@ -68,6 +68,9 @@ linux:
     - AppImage
     - deb
   category: Utility
+  # .deb requires a maintainer "Name <email>"; placeholder keeps a personal
+  # address out of the public package. Change if you want real contact info.
+  maintainer: DoodlePilot <noreply@doodlepilot.app>
   # build/icon.png  (512x512)
 
 appImage:
