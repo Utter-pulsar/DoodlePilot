@@ -75,6 +75,14 @@ Your data is stored locally in your OS app-data folder:
 - **macOS** — `~/Library/Application Support/DoodlePilot/`
 - **Linux** — `~/.config/DoodlePilot/`
 
+If you want to download mac version, please type the following command after dragging ```DoodlePilot.app``` into the application because of the signature.
+
+```bash
+sudo xattr -cr /Applications/DoodlePilot.app
+# if the file still broken then:
+sudo codesign --force --deep --sign - /Applications/DoodlePilot.ap
+```
+
 ## Tech stack
 
 Electron · electron-vite · React 19 · Zustand · Tailwind CSS · framer-motion · PixiJS · Rough.js · sql.js · TypeScript.

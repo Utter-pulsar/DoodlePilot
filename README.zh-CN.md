@@ -75,6 +75,14 @@ npm run build:linux   # Linux
 - **macOS** —— `~/Library/Application Support/DoodlePilot/`
 - **Linux** —— `~/.config/DoodlePilot/`
 
+如果你下载苹果版本的安装包，先把 DoodlePilot.app 拖到「应用程序」里,然后打开终端(Terminal),运行:
+
+```bash
+sudo xattr -cr /Applications/DoodlePilot.app
+# 如果还是报已损坏，再补一条本地 ad-hoc 签名:
+sudo codesign --force --deep --sign - /Applications/DoodlePilot.ap
+```
+
 ## 技术栈
 
 Electron · electron-vite · React 19 · Zustand · Tailwind CSS · framer-motion · PixiJS · Rough.js · sql.js · TypeScript。
