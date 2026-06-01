@@ -83,6 +83,20 @@ sudo xattr -cr /Applications/DoodlePilot.app
 sudo codesign --force --deep --sign - /Applications/DoodlePilot.ap
 ```
 
+如果你下载的是deb的版本的话，请根据下面的步骤来设置沙箱的setuid以及icon图标。
+
+```bash
+DEB=./doodlepilot_0.1.0_amd64.deb
+
+sudo apt install -y "$DEB"                                    # 装（自动拉依赖；deb前必须带 ./）
+sudo chmod 4755 /opt/DoodlePilot/chrome-sandbox              # 坑①：沙箱补 setuid，否则打不开
+for s in 128 256 512; do                                     # 坑②：图标补到标准尺寸目录
+  sudo install -Dm644 /usr/share/icons/hicolor/1254x1254/apps/doodlepilot.png \
+    /usr/share/icons/hicolor/${s}x${s}/apps/doodlepilot.png
+done
+sudo gtk-update-icon-cache -f /usr/share/icons/hicolor       # 刷新图标缓存
+```
+
 ## 技术栈
 
 Electron · electron-vite · React 19 · Zustand · Tailwind CSS · framer-motion · PixiJS · Rough.js · sql.js · TypeScript。

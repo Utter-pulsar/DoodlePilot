@@ -1,9 +1,10 @@
 import { join } from 'node:path'
-import { BrowserWindow, app, screen } from 'electron'
+import { BrowserWindow, Menu, Tray, app, nativeImage, screen } from 'electron'
 import { is } from '@electron-toolkit/utils'
 import type { EventMap } from '@shared/api/contract'
 import { IPC } from '@shared/api/channels'
 import type { AppCore } from '../services/context'
+import { checkForUpdatesIfEnabled } from '../services/updater'
 
 const PRELOAD = join(__dirname, '../preload/index.js')
 
@@ -27,10 +28,22 @@ interface DisplayLayout {
 export class WindowManager {
   private main: BrowserWindow | null = null
   private overlay: BrowserWindow | null = null
+  private tray: Tray | null = null
   private layout: DisplayLayout
+  private readonly core: AppCore
+  // flipped on ANY quit path (tray "退出", Cmd+Q, OS shutdown) so the main-window 'close'
+  // handler lets the window actually close instead of re-hiding it to the tray.
+  private quitting = false
 
   constructor(core: AppCore) {
+    this.core = core
     this.layout = WindowManager.computeLayout()
+
+    // a real quit fires before-quit BEFORE the windows receive 'close', so flagging here
+    // guarantees the close handler sees it and does not intercept the close.
+    app.on('before-quit', () => {
+      this.quitting = true
+    })
 
     // the overlay toggles its own click-through as the cursor enters/leaves sprites
     core.commands.register('overlay.setInteractive', ({ interactive }) => {
@@ -48,13 +61,33 @@ export class WindowManager {
     // app metadata for the title-bar "版本" popup (also queryable by a future AI/harness)
     core.queries.register('app.info', () => ({ name: 'DoodlePilot', version: app.getVersion() }))
 
-    // recolor the native window-controls overlay (Win/Linux only) when the theme flips
-    core.commands.register('window.applyTheme', ({ dark }) => {
-      if (process.platform === 'darwin' || !this.main || this.main.isDestroyed()) return
-      this.main.setTitleBarOverlay({
-        color: dark ? '#1A1612' : '#FBF7EF',
-        symbolColor: dark ? '#E8E4DB' : '#2B2B2B'
+    // custom (renderer-drawn) window controls for the frameless Win/Linux window
+    core.commands.register('window.minimize', () => this.main?.minimize())
+    core.commands.register('window.toggleMaximize', () => {
+      const w = this.main
+      if (!w || w.isDestroyed()) return
+      if (w.isMaximized()) w.unmaximize()
+      else w.maximize()
+    })
+    core.commands.register('window.close', () => this.main?.close())
+    core.queries.register('window.isMaximized', () => this.main?.isMaximized() ?? false)
+
+    // ---- app settings: read + write (the write applies tray / login-item side effects) ----
+    core.queries.register('settings.get', () => ({ ...core.store.data.settings }))
+    core.commands.register('settings.update', ({ patch }) => {
+      core.store.mutate((db) => {
+        db.settings = { ...db.settings, ...patch }
       })
+      // launch-at-login is a real OS registration; only touch it in a packaged build so a
+      // dev run never registers the throwaway electron-dev binary as a startup item.
+      if (patch.launchAtLogin !== undefined && app.isPackaged) {
+        app.setLoginItemSettings({ openAtLogin: patch.launchAtLogin })
+      }
+      // create/destroy the tray to match the new run-in-background state
+      if (patch.runInBackground !== undefined) this.syncTray()
+      // if auto-update was just turned ON, check right away rather than waiting for restart
+      if (patch.autoUpdate === true) checkForUpdatesIfEnabled(core)
+      return { ...core.store.data.settings }
     })
   }
 
@@ -77,6 +110,8 @@ export class WindowManager {
   createAll(): void {
     this.createMainWindow()
     this.createOverlayWindow()
+    // restore the tray if a previous session left run-in-background enabled
+    this.syncTray()
   }
 
   /** Send a business event to every renderer window. */
@@ -95,12 +130,10 @@ export class WindowManager {
       title: 'DoodlePilot',
       backgroundColor: '#FBF7EF',
       autoHideMenuBar: true,
-      // blend the OS title bar into the app: hide it but keep the native window
-      // controls — overlaid top-right on Win/Linux, traffic lights top-left on macOS
+      // hide the OS title bar. On Win/Linux the window is frameless and the renderer draws its
+      // own min/max/close (so they dim with the page — no native-overlay colour flash); on
+      // macOS 'hidden' keeps the native traffic lights top-left.
       titleBarStyle: 'hidden',
-      ...(process.platform !== 'darwin'
-        ? { titleBarOverlay: { color: '#FBF7EF', symbolColor: '#2B2B2B', height: 44 } }
-        : {}),
       ...(is.dev ? { icon: join(process.cwd(), 'build', 'icon.png') } : {}),
       show: false,
       webPreferences: { preload: PRELOAD, sandbox: false }
@@ -116,10 +149,33 @@ export class WindowManager {
       console.log(`[main] app did-fail-load code=${code} "${desc}" url=${url}`)
     )
     setTimeout(reveal, 2500)
+    // Windows shutdown/logout does NOT fire app 'before-quit', so flag the quit here too
+    // (otherwise the close handler would pointlessly hide a window the OS is destroying) and
+    // flush state synchronously, since the normal before-quit cleanup won't run on session-end.
+    this.main.on('session-end', () => {
+      this.quitting = true
+      this.core.store.flush()
+    })
+    // run-in-background: intercept the close and hide to the tray instead of quitting.
+    // 'close' fires before 'closed' (which destroys the window), so we preventDefault here.
+    this.main.on('close', (e) => {
+      if (!this.quitting && this.core.store.data.settings.runInBackground) {
+        e.preventDefault()
+        this.main?.hide()
+        if (process.platform === 'darwin') app.dock?.hide()
+      }
+    })
     this.main.on('closed', () => {
       this.main = null
-      app.quit() // closing the main window exits the whole app (overlay included)
+      // when NOT running in background, closing the main window exits the whole app
+      // (overlay included). On a real quit the app is already on its way out.
+      if (!this.quitting) app.quit()
     })
+    // keep the renderer's maximize/restore icon in sync with the real window state
+    const emitMaximized = (): void =>
+      this.core.events.emit('window.maximized', this.main?.isMaximized() ?? false)
+    this.main.on('maximize', emitMaximized)
+    this.main.on('unmaximize', emitMaximized)
     // In dev, surface renderer console warnings/errors in the terminal so we never
     // have to guess why the window is blank. Press F12 for full DevTools.
     if (is.dev) {
@@ -167,5 +223,51 @@ export class WindowManager {
 
   getMain(): BrowserWindow | null {
     return this.main
+  }
+
+  /** Restore (or recreate) the main window and bring it to the front — used by the tray. */
+  showMain(): void {
+    if (this.main && !this.main.isDestroyed()) {
+      if (this.main.isMinimized()) this.main.restore()
+      this.main.show()
+      this.main.focus()
+    } else {
+      this.createMainWindow()
+    }
+    if (process.platform === 'darwin') app.dock?.show()
+  }
+
+  /** Create the tray when running in background, destroy it otherwise. Safe to call anytime. */
+  private syncTray(): void {
+    const enabled = this.core.store.data.settings.runInBackground
+    if (enabled && !this.tray) this.createTray()
+    else if (!enabled && this.tray) {
+      this.tray.destroy()
+      this.tray = null
+    }
+  }
+
+  private createTray(): void {
+    // assets/ ships to resources/assets in production (see electron-builder.yml); in dev it's
+    // read from the project root. The 128px logo is downscaled to a tray-appropriate size.
+    const iconPath = is.dev
+      ? join(process.cwd(), 'assets', 'logo.png')
+      : join(process.resourcesPath, 'assets', 'logo.png')
+    const image = nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 })
+    // createFromPath returns an EMPTY image (it does not throw) if the file is missing, which
+    // yields a blank tray icon — surface it so a packaging regression is visible in the logs.
+    if (image.isEmpty()) console.warn(`[tray] icon failed to load from ${iconPath}`)
+    const tray = new Tray(image)
+    tray.setToolTip('DoodlePilot')
+    tray.setContextMenu(
+      Menu.buildFromTemplate([
+        { label: '显示 DoodlePilot', click: () => this.showMain() },
+        { type: 'separator' },
+        { label: '退出', click: () => app.quit() }
+      ])
+    )
+    // Windows: a single left-click on the tray icon restores the window
+    tray.on('click', () => this.showMain())
+    this.tray = tray
   }
 }

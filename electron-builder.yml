@@ -76,4 +76,11 @@ linux:
 appImage:
   artifactName: ${productName}-${version}.${ext}
 
-publish: null
+# Update feed: electron-updater reads this (embedded as app-update.yml in the build) to
+# find newer GitHub Releases. Generating latest*.yml happens at build time regardless of
+# whether CI uploads directly — the build.yml workflow ships those .yml/.blockmap files
+# into the Release so installed apps can discover updates.
+publish:
+  provider: github
+  owner: Utter-pulsar
+  repo: DoodlePilot

@@ -30,6 +30,14 @@ interface DoodleState {
   openCardMenu: (recordId: Id, x: number, y: number) => void
   closeCardMenu: () => void
 
+  /** alarm create/edit form open-state — lifted here so leaving the 闹钟 tab can collapse the
+   *  open form (with its animation) before the tab actually switches */
+  alarmCreating: boolean
+  alarmEditingId: Id | null
+  setAlarmCreating: (v: boolean) => void
+  setAlarmEditingId: (id: Id | null) => void
+  closeAlarmForm: () => void
+
   /** in-app prompt/confirm (Electron has no usable window.prompt; window.confirm looks off) */
   dialog: {
     kind: 'prompt' | 'confirm'
@@ -61,7 +69,6 @@ export const useStore = create<DoodleState>((set, get) => ({
     const next: Theme = get().theme === 'dark' ? 'paper' : 'dark'
     localStorage.setItem(THEME_KEY, next)
     applyTheme(next)
-    void api.command('window.applyTheme', { dark: next === 'dark' })
     set({ theme: next })
   },
 
@@ -70,6 +77,12 @@ export const useStore = create<DoodleState>((set, get) => ({
   cardMenu: null,
   openCardMenu: (recordId, x, y) => set({ cardMenu: { recordId, x, y } }),
   closeCardMenu: () => set({ cardMenu: null }),
+
+  alarmCreating: false,
+  alarmEditingId: null,
+  setAlarmCreating: (v) => set({ alarmCreating: v }),
+  setAlarmEditingId: (id) => set({ alarmEditingId: id }),
+  closeAlarmForm: () => set({ alarmCreating: false, alarmEditingId: null }),
 
   dialog: null,
   askPrompt: (title, defaultValue = '') =>
@@ -89,8 +102,6 @@ export const useStore = create<DoodleState>((set, get) => ({
     set({ collections, alarms })
     await get().reloadRecords()
     set({ ready: true })
-    // sync the native title-bar controls to the persisted theme
-    void api.command('window.applyTheme', { dark: get().theme === 'dark' })
 
     // keep the store live
     api.on('collections.changed', async (collections) => {

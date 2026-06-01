@@ -83,6 +83,20 @@ sudo xattr -cr /Applications/DoodlePilot.app
 sudo codesign --force --deep --sign - /Applications/DoodlePilot.ap
 ```
 
+If you want to download deb version, please follow the following instruction to set the sandbox setuid and the icon.
+
+```bash
+DEB=./doodlepilot_0.1.0_amd64.deb
+
+sudo apt install -y "$DEB"                                    # 装（自动拉依赖；deb前必须带 ./）
+sudo chmod 4755 /opt/DoodlePilot/chrome-sandbox              # 坑①：沙箱补 setuid，否则打不开
+for s in 128 256 512; do                                     # 坑②：图标补到标准尺寸目录
+  sudo install -Dm644 /usr/share/icons/hicolor/1254x1254/apps/doodlepilot.png \
+    /usr/share/icons/hicolor/${s}x${s}/apps/doodlepilot.png
+done
+sudo gtk-update-icon-cache -f /usr/share/icons/hicolor       # 刷新图标缓存
+```
+
 ## Tech stack
 
 Electron · electron-vite · React 19 · Zustand · Tailwind CSS · framer-motion · PixiJS · Rough.js · sql.js · TypeScript.

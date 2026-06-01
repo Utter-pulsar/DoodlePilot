@@ -3,12 +3,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import initSqlJs, { type Database as SqlDb } from 'sql.js'
 import { DATA_FILE } from '@shared/constants'
-import type { Alarm, Collection, RecordItem } from '@shared/types'
+import type { Alarm, AppSettings, Collection, RecordItem } from '@shared/types'
+import { DEFAULT_SETTINGS } from '@shared/types'
 import { seedDatabase, SEED_VERSION } from './seed'
-
-export interface AppSettings {
-  theme: 'paper' | 'dark'
-}
 
 /** In-memory snapshot the services read/mutate. Persisted to a real SQLite file. */
 export interface Database {
@@ -82,9 +79,11 @@ export class Store {
       return res.length ? res[0].values.map((v) => v[0] as string) : []
     }
     const settingsRes = sql.exec("SELECT value FROM settings WHERE key = 'settings'")
+    // merge persisted values over the defaults so a blob written by an older version
+    // (missing newer keys like runInBackground) is transparently backfilled.
     const settings: AppSettings = settingsRes.length
-      ? (JSON.parse(settingsRes[0].values[0][0] as string) as AppSettings)
-      : { theme: 'paper' }
+      ? { ...DEFAULT_SETTINGS, ...(JSON.parse(settingsRes[0].values[0][0] as string) as Partial<AppSettings>) }
+      : { ...DEFAULT_SETTINGS }
     const versionRes = sql.exec("SELECT value FROM settings WHERE key = 'version'")
     const version = versionRes.length ? Number(versionRes[0].values[0][0]) : 1
 

@@ -1,5 +1,6 @@
 import type {
   Alarm,
+  AppSettings,
   Collection,
   CollectionKind,
   FieldDef,
@@ -28,6 +29,8 @@ export type QueryMap = {
   'alarms.list': { input: void; result: Alarm[] }
   'overlay.layout': { input: void; result: OverlayLayout }
   'app.info': { input: void; result: { name: string; version: string } }
+  'settings.get': { input: void; result: AppSettings }
+  'window.isMaximized': { input: void; result: boolean }
 }
 
 export type CommandMap = {
@@ -74,8 +77,17 @@ export type CommandMap = {
   // overlay window toggles its own click-through when the cursor enters/leaves a sprite
   'overlay.setInteractive': { input: { interactive: boolean }; result: void }
   'banner.show': { input: BannerView; result: void }
-  // recolor the native window-controls overlay (Win/Linux) for light/dark themes
-  'window.applyTheme': { input: { dark: boolean }; result: void }
+  // custom (renderer-drawn) window controls — the window is frameless on Win/Linux, so the
+  // title bar provides its own min/max/close (they dim naturally with the page, no native flash)
+  'window.minimize': { input: void; result: void }
+  'window.toggleMaximize': { input: void; result: void }
+  'window.close': { input: void; result: void }
+
+  // ---- app settings ----
+  // merge a partial patch into the persisted settings; returns the full updated settings.
+  // The main process applies side effects (tray for runInBackground, OS login item for
+  // launchAtLogin) before returning.
+  'settings.update': { input: { patch: Partial<AppSettings> }; result: AppSettings }
 }
 
 export type EventMap = {
@@ -85,6 +97,7 @@ export type EventMap = {
   'overlay.banner': BannerView
   'alarm.ring': { alarmId: Id; label: string } // renderer plays a sound on this
   'toast': { kind: 'info' | 'success' | 'error'; message: string }
+  'window.maximized': boolean // main → renderer: the main window's maximized state changed
 }
 
 export type QueryName = keyof QueryMap

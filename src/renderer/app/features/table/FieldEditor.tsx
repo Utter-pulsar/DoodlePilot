@@ -1,4 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
+import rough from 'roughjs'
 import type {
   ChecklistItem,
   Collection,
@@ -12,8 +14,14 @@ import { newId } from '@shared/types'
 import { DOODLE_PALETTE, PALETTE_TOKENS } from '@shared/constants'
 import { useStore } from '../../store'
 import { api } from '../../lib/bridge'
+import { cssColor } from '../../lib/theme'
 import { DoodleNumber } from '../../components/doodle/DoodleNumber'
-import { DoodleDatePicker } from '../../components/doodle/DoodleDatePicker'
+import {
+  DoodleDatePicker,
+  DateTrigger,
+  DoodleCalendar
+} from '../../components/doodle/DoodleDatePicker'
+import { DoodleBox } from '../../components/doodle/DoodleBox'
 import { DoodleCheckbox } from '../../components/doodle/DoodleCheckbox'
 
 const hex = (token?: string): string => (token && DOODLE_PALETTE[token]) || '#FFD23F'
@@ -84,6 +92,40 @@ function TextArea({ value, onCommit }: { value: string; onCommit: (v: string) =>
   )
 }
 
+/** A hand-drawn capillary "water droplet" bridge — wide where it clings to the field and the
+ *  calendar, concave (pinched) in the middle, like liquid held by surface tension. */
+function DropletBridge(): JSX.Element {
+  const svgRef = useRef<SVGSVGElement>(null)
+  const theme = useStore((s) => s.theme)
+  useEffect(() => {
+    const svg = svgRef.current
+    if (!svg) return
+    svg.innerHTML = ''
+    const rc = rough.svg(svg)
+    const W = 44
+    const H = 18
+    const pinch = 13 // how far the sides curve inward (concave waist)
+    const d = [
+      `M3,2`,
+      `L${W - 3},2`, // top edge — clings to the field
+      `Q${W - pinch},${H / 2} ${W - 3},${H - 2}`, // right side curves inward
+      `L3,${H - 2}`, // bottom edge — clings to the calendar
+      `Q${pinch},${H / 2} 3,2`, // left side curves inward
+      'Z'
+    ].join(' ')
+    svg.appendChild(
+      rc.path(d, {
+        roughness: 1.2,
+        stroke: cssColor('--ink'),
+        strokeWidth: 2,
+        fill: cssColor('--card'),
+        fillStyle: 'solid'
+      })
+    )
+  }, [theme])
+  return <svg ref={svgRef} viewBox="0 0 44 18" width="44" height="18" className="block" />
+}
+
 function DateRange({
   value,
   onCommit
@@ -91,19 +133,80 @@ function DateRange({
   value: DateRangeValue
   onCommit: (v: DateRangeValue) => void
 }): JSX.Element {
+  // only ONE calendar is ever open, so it can use the full row width; clicking the other
+  // field switches to it (and closes the first).
+  const [active, setActive] = useState<'start' | 'end' | null>(null)
+  const toggle = (k: 'start' | 'end'): void => setActive((a) => (a === k ? null : k))
+  const rootRef = useRef<HTMLDivElement>(null)
+
+  // click anywhere outside the field/calendar collapses it (with the exit animation below)
+  useEffect(() => {
+    if (!active) return
+    const onDown = (e: PointerEvent): void => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setActive(null)
+    }
+    document.addEventListener('pointerdown', onDown, true)
+    return () => document.removeEventListener('pointerdown', onDown, true)
+  }, [active])
+
   return (
-    <div className="space-y-1">
-      <DoodleDatePicker
-        value={value.start}
-        onChange={(s) => onCommit({ ...value, start: s })}
-        placeholder="开始日期"
-      />
-      <div className="text-center text-sm opacity-50">↓</div>
-      <DoodleDatePicker
-        value={value.end}
-        onChange={(e) => onCommit({ ...value, end: e })}
-        placeholder="结束日期"
-      />
+    <div ref={rootRef} className="font-doodle">
+      <div className="flex items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <DateTrigger
+            value={value.start}
+            active={active === 'start'}
+            onToggle={() => toggle('start')}
+            onClear={() => onCommit({ ...value, start: null })}
+            placeholder="开始日期"
+          />
+        </div>
+        <span className="pt-2 text-sm opacity-50">→</span>
+        <div className="min-w-0 flex-1">
+          <DateTrigger
+            value={value.end}
+            active={active === 'end'}
+            onToggle={() => toggle('end')}
+            onClear={() => onCommit({ ...value, end: null })}
+            placeholder="结束日期"
+          />
+        </div>
+      </div>
+
+      <AnimatePresence initial={false}>
+        {active && (
+          <motion.div
+            key="cal"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ height: { type: 'spring', stiffness: 320, damping: 26 }, opacity: { duration: 0.15 } }}
+            style={{ overflow: 'hidden' }}
+          >
+            <div className="relative pt-3">
+              {/* a hand-drawn concave "water droplet" — its wide top/bottom cling to the field
+                  and the calendar, pinched in the middle as if by surface tension. Slides to
+                  the active field when you switch start ↔ end. */}
+              <div
+                className="absolute top-0 z-10 -translate-x-1/2 transition-[left] duration-200"
+                style={{ left: active === 'start' ? '25%' : '75%' }}
+              >
+                <DropletBridge />
+              </div>
+              <DoodleBox fill="--card" fillStyle="solid">
+                <DoodleCalendar
+                  key={active}
+                  value={active === 'start' ? value.start : value.end}
+                  onPick={(iso) => {
+                    onCommit(active === 'start' ? { ...value, start: iso } : { ...value, end: iso })
+                    setActive(null)
+                  }}
+                />
+              </DoodleBox>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }

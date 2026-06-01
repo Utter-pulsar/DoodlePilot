@@ -2,15 +2,18 @@ import { useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { api } from '../lib/bridge'
 import { DoodleBox } from './doodle/DoodleBox'
+import { ModalScrim } from './ModalScrim'
+import { SettingsDialog } from './SettingsDialog'
 import logoUrl from '@assets/logo.png'
 
-const TITLEBAR_H = 44 // matches the native titleBarOverlay height set in the main process
+const TITLEBAR_H = 44 // height of the draggable title-bar strip
 
 /**
- * The integrated window title bar. A hamburger menu on the LEFT mirrors the native
- * min/max/close controls on the RIGHT (visual symmetry); the bar is drag-to-move and
- * uses a solid paper fill (no dot texture) so it blends seamlessly with the native
- * controls overlay. The "版本" item pops a Q-bouncy About card.
+ * The integrated window title bar: a hamburger menu + the window controls. On Win/Linux the
+ * window is frameless, so we draw our own hand-drawn min/max/close on the RIGHT (they dim with
+ * the page like everything else — no native-overlay colour flash); on macOS the native traffic
+ * lights sit top-left, so the hamburger moves to the right instead. Drag-to-move, solid paper
+ * fill. The "版本" item pops a Q-bouncy About card.
  */
 export function TitleBar(): JSX.Element {
   // ☰ mirrors the native window controls into the opposite corner: controls are on the
@@ -18,6 +21,7 @@ export function TitleBar(): JSX.Element {
   const isMac = window.platform === 'darwin'
   const [menuOpen, setMenuOpen] = useState(false)
   const [aboutOpen, setAboutOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [info, setInfo] = useState<{ name: string; version: string } | null>(null)
 
   useEffect(() => {
@@ -49,15 +53,18 @@ export function TitleBar(): JSX.Element {
             <line x1="3.5" y1="14" x2="16.5" y2="14" />
           </svg>
         </button>
+
+        {/* hand-drawn min/max/close on Win/Linux (macOS uses its native traffic lights) */}
+        {!isMac && <WindowControls />}
       </div>
 
       {/* dropdown under the hamburger */}
       <AnimatePresence>
         {menuOpen && (
           <>
-            <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} />
+            <div className="fixed inset-0 z-[70]" onClick={() => setMenuOpen(false)} />
             <motion.div
-              className="fixed z-50 font-doodle"
+              className="fixed z-[80] font-doodle"
               style={{
                 top: TITLEBAR_H - 4,
                 ...(isMac ? { right: 8 } : { left: 8 }),
@@ -72,6 +79,17 @@ export function TitleBar(): JSX.Element {
                 <button
                   onClick={() => {
                     setMenuOpen(false)
+                    setAboutOpen(false) // switch directly if the other dialog is already open
+                    setSettingsOpen(true)
+                  }}
+                  className="flex w-full items-center gap-2 rounded-[6px] px-3 py-1.5 text-left text-base hover:bg-marker-yellow/40"
+                >
+                  ⚙️ 设置
+                </button>
+                <button
+                  onClick={() => {
+                    setMenuOpen(false)
+                    setSettingsOpen(false) // switch directly if the other dialog is already open
                     setAboutOpen(true)
                   }}
                   className="flex w-full items-center gap-2 rounded-[6px] px-3 py-1.5 text-left text-base hover:bg-marker-yellow/40"
@@ -88,14 +106,14 @@ export function TitleBar(): JSX.Element {
       <AnimatePresence>
         {aboutOpen && (
           <motion.div
-            className="fixed inset-0 z-50 flex items-center justify-center"
+            className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
           >
-            <div className="absolute inset-0 bg-black/55" onClick={() => setAboutOpen(false)} />
+            <ModalScrim onDismiss={() => setAboutOpen(false)} />
             <motion.div
-              className="relative"
+              className="pointer-events-auto relative"
               initial={{ scale: 0.8, opacity: 0, y: 12 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.85, opacity: 0, y: 8 }}
@@ -118,6 +136,61 @@ export function TitleBar(): JSX.Element {
           </motion.div>
         )}
       </AnimatePresence>
+
+      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </>
+  )
+}
+
+/** Hand-drawn minimize / maximize-restore / close for the frameless Win/Linux window. */
+function WindowControls(): JSX.Element {
+  const [maximized, setMaximized] = useState(false)
+  useEffect(() => {
+    void api.query('window.isMaximized', undefined).then(setMaximized)
+    return api.on('window.maximized', setMaximized) // keep the icon in sync with the real state
+  }, [])
+  const btn =
+    'app-no-drag flex h-8 w-8 items-center justify-center rounded-[8px] text-ink/80 transition hover:bg-ink/10'
+  return (
+    <div className="ml-auto flex items-center gap-1">
+      <button
+        aria-label="最小化"
+        title="最小化"
+        onClick={() => void api.command('window.minimize', undefined)}
+        className={btn}
+      >
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+          <line x1="4" y1="13" x2="16" y2="13" />
+        </svg>
+      </button>
+      <button
+        aria-label={maximized ? '还原' : '最大化'}
+        title={maximized ? '还原' : '最大化'}
+        onClick={() => void api.command('window.toggleMaximize', undefined)}
+        className={btn}
+      >
+        {maximized ? (
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="4.5" y="6.5" width="9" height="9" rx="1.5" />
+            <path d="M7.5 6.5 V4.5 H15.5 V12.5 H13.5" />
+          </svg>
+        ) : (
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="4.5" y="4.5" width="11" height="11" rx="1.5" />
+          </svg>
+        )}
+      </button>
+      <button
+        aria-label="关闭"
+        title="关闭"
+        onClick={() => void api.command('window.close', undefined)}
+        className={`${btn} hover:bg-marker-coral hover:text-[#2B2B2B]`}
+      >
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+          <line x1="5.5" y1="5.5" x2="14.5" y2="14.5" />
+          <line x1="14.5" y1="5.5" x2="5.5" y2="14.5" />
+        </svg>
+      </button>
+    </div>
   )
 }

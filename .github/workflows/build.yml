@@ -22,6 +22,16 @@ jobs:
         with:
           node-version: 20
 
+      # auto-update feed (latest*.yml) takes its version from package.json, NOT the git tag,
+      # so a mismatched tag would publish a Release that advertises the wrong update version.
+      - name: Verify tag matches package.json version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          TAG=${GITHUB_REF_NAME#v}
+          PKG=$(node -p "require('./package.json').version")
+          if [ "$TAG" != "$PKG" ]; then echo "::error::Tag v$TAG does not match package.json version $PKG"; exit 1; fi
+
       - name: Install deps
         run: npm install --no-audit --no-fund
 
@@ -53,6 +63,8 @@ jobs:
             dist/*.zip
             dist/*.AppImage
             dist/*.deb
+            dist/*.yml
+            dist/*.blockmap
           if-no-files-found: ignore
 
   # Collect every OS's installers and attach them to one GitHub Release for the tag.

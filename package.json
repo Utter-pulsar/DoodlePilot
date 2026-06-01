@@ -1,6 +1,6 @@
 {
   "name": "doodlepilot",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "DoodlePilot — a hand-drawn desktop work buddy: a doodle-style project board and banner-pulling paper-plane alarms.",
   "author": "DoodlePilot",
   "license": "GPL-3.0-or-later",
@@ -20,19 +20,20 @@
   "dependencies": {
     "@electron-toolkit/utils": "^4.0.0",
     "croner": "^9.0.0",
+    "electron-updater": "^6.8.3",
     "sql.js": "^1.12.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
-    "@types/sql.js": "^1.4.9",
     "@types/react": "^19.0.4",
     "@types/react-dom": "^19.0.2",
+    "@types/sql.js": "^1.4.9",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
-    "framer-motion": "^11.15.0",
     "electron": "^34.0.0",
     "electron-builder": "^25.1.8",
     "electron-vite": "^3.0.0",
+    "framer-motion": "^11.15.0",
     "pixi.js": "^8.6.6",
     "postcss": "^8.4.49",
     "react": "^19.0.0",

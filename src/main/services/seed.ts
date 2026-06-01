@@ -1,4 +1,4 @@
-import { newId, nowISO } from '@shared/types'
+import { newId, nowISO, DEFAULT_SETTINGS } from '@shared/types'
 import type { ChecklistItem, Collection, FieldDef, RecordItem, SelectOption } from '@shared/types'
 import type { Database } from './store'
 
@@ -173,6 +173,6 @@ export function seedDatabase(): Database {
     collections: [people, projects, weekly, daily],
     records,
     alarms: [],
-    settings: { theme: 'paper' }
+    settings: { ...DEFAULT_SETTINGS }
   }
 }

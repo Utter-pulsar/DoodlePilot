@@ -42,7 +42,10 @@ export function DoodleWheel({ values, value, onChange, format }: Props): JSX.Ele
     programmatic.current = false
   }
 
-  // update the LIVE centred index (highlight) — does NOT commit the value
+  // update the LIVE centred index (highlight) AND commit it, so the bound display (e.g. the
+  // time-picker header) tracks the wheel in real time. Committing live is safe: the `value`
+  // sync effect below is guarded during drag/momentum/native-scroll, so the wheel never
+  // teleports back / fights itself.
   const recenter = (): void => {
     const el = ref.current
     if (!el) return
@@ -50,6 +53,8 @@ export function DoodleWheel({ values, value, onChange, format }: Props): JSX.Ele
     if (i !== centerRef.current) {
       centerRef.current = i
       setCenterView(i)
+      const v = values[i]
+      if (v !== value) onChange(v)
     }
   }
   const commitFinal = (): void => {

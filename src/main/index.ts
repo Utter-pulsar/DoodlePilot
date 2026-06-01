@@ -6,6 +6,7 @@ import { createAppCore } from './services/context'
 import { registerCollectionService } from './services/collection-service'
 import { registerAlarmService } from './services/alarm-service'
 import { Scheduler } from './services/scheduler'
+import { checkForUpdatesIfEnabled } from './services/updater'
 import { WindowManager } from './windows/window-manager'
 import { registerIpc } from './ipc/register-ipc'
 import { registerIntegrations } from './integrations'
@@ -23,6 +24,11 @@ app.whenReady().then(async () => {
   app.setName(APP_NAME)
 
   store = await Store.open()
+  // keep the OS "launch at login" registration in sync with the persisted setting
+  // (packaged only — a dev run must never register the throwaway electron-dev binary)
+  if (app.isPackaged) {
+    app.setLoginItemSettings({ openAtLogin: store.data.settings.launchAtLogin })
+  }
   const core = createAppCore(store)
 
   // services register their query/command handlers on the core registries
@@ -41,15 +47,25 @@ app.whenReady().then(async () => {
 
   windows.createAll()
 
+  // startup auto-update: checks GitHub for a newer release if the user enabled it (packaged only)
+  checkForUpdatesIfEnabled(core)
+
   app.on('browser-window-created', (_e, win) => optimizer.watchWindowShortcuts(win))
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) windows.createAll()
+    else windows.showMain() // macOS dock re-click: un-hide a window parked in the tray
   })
+
+  // re-launching the exe while we're hidden in the tray surfaces the existing window
+  // (the single-instance lock above quits the 2nd process, so this fires in the 1st)
+  app.on('second-instance', () => windows.showMain())
 })
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
+  // while running in background the windows stay alive (hidden), so this normally won't
+  // fire; the guard is defensive in case only the click-through overlay remains.
+  if (process.platform !== 'darwin' && !store?.data.settings.runInBackground) app.quit()
 })
 
 app.on('before-quit', () => {
