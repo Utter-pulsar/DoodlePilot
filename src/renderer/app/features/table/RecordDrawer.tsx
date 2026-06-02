@@ -343,7 +343,10 @@ function DrawerFieldRow({
           )}
         </span>
       </div>
-      <FieldEditor collection={collection} record={record} field={field} />
+      {/* key by record id: switching cards must remount the editor so its local draft (TextArea /
+          uncontrolled input) re-initialises from the NEW record — otherwise it keeps showing the
+          first-selected card's text */}
+      <FieldEditor key={record.id} collection={collection} record={record} field={field} />
     </>
   )
 
