@@ -48,6 +48,11 @@ interface DoodleState {
   askPrompt: (title: string, defaultValue?: string) => Promise<string | null>
   askConfirm: (title: string) => Promise<boolean>
 
+  /** a downloaded app update awaiting the user's OK (null = none / dismissed / auto-update off) */
+  updateVersion: string | null
+  installUpdate: () => void
+  dismissUpdate: () => void
+
   init: () => Promise<void>
   reloadRecords: () => Promise<void>
 
@@ -94,12 +99,20 @@ export const useStore = create<DoodleState>((set, get) => ({
       set({ dialog: { kind: 'confirm', title, defaultValue: '', resolve: (v) => resolve(!!v) } })
     ),
 
+  updateVersion: null,
+  installUpdate: () => void api.command('update.install', undefined),
+  dismissUpdate: () => {
+    void api.command('update.dismiss', undefined) // tell main to suppress until the next launch
+    set({ updateVersion: null })
+  },
+
   init: async () => {
-    const [collections, alarms] = await Promise.all([
+    const [collections, alarms, pendingUpdate] = await Promise.all([
       api.query('collections.list', undefined),
-      api.query('alarms.list', undefined)
+      api.query('alarms.list', undefined),
+      api.query('update.pending', undefined)
     ])
-    set({ collections, alarms })
+    set({ collections, alarms, updateVersion: pendingUpdate?.version ?? null })
     await get().reloadRecords()
     set({ ready: true })
 
@@ -110,6 +123,7 @@ export const useStore = create<DoodleState>((set, get) => ({
     })
     api.on('records.changed', () => void get().reloadRecords())
     api.on('alarms.changed', (alarms) => set({ alarms }))
+    api.on('update.changed', (u) => set({ updateVersion: u?.version ?? null }))
   },
 
   reloadRecords: async () => {

@@ -31,6 +31,8 @@ export type QueryMap = {
   'app.info': { input: void; result: { name: string; version: string } }
   'settings.get': { input: void; result: AppSettings }
   'window.isMaximized': { input: void; result: boolean }
+  // a downloaded, ready-to-install update (null = none / dismissed / auto-update off)
+  'update.pending': { input: void; result: { version: string } | null }
 }
 
 export type CommandMap = {
@@ -64,6 +66,13 @@ export type CommandMap = {
   'records.link': { input: { fromId: Id; fieldId: Id; toId: Id }; result: void }
   'records.unlink': { input: { fromId: Id; fieldId: Id; toId: Id }; result: void }
 
+  // ---- per-card field set (each card owns which of the lane's fields it shows) ----
+  // addField creates the field in the lane registry AND attaches it to this one card; new cards
+  // inherit it, existing cards do not. removeField drops it from this card only (and GCs the
+  // lane definition once no card uses it).
+  'records.addField': { input: { recordId: Id; field: Omit<FieldDef, 'id'> }; result: RecordItem }
+  'records.removeField': { input: { recordId: Id; fieldId: Id }; result: RecordItem }
+
   // ---- semantic task actions (these run hooks + may drive the desktop) ----
   'task.complete': { input: { recordId: Id }; result: RecordItem }
 
@@ -88,6 +97,10 @@ export type CommandMap = {
   // The main process applies side effects (tray for runInBackground, OS login item for
   // launchAtLogin) before returning.
   'settings.update': { input: { patch: Partial<AppSettings> }; result: AppSettings }
+
+  // ---- app self-update (electron-updater); both gated by the autoUpdate setting ----
+  'update.install': { input: void; result: void } // user accepted → quit + install + relaunch
+  'update.dismiss': { input: void; result: void } // "稍后" → suppress until the next launch
 }
 
 export type EventMap = {
@@ -98,6 +111,7 @@ export type EventMap = {
   'alarm.ring': { alarmId: Id; label: string } // renderer plays a sound on this
   'toast': { kind: 'info' | 'success' | 'error'; message: string }
   'window.maximized': boolean // main → renderer: the main window's maximized state changed
+  'update.changed': { version: string } | null // a downloaded update is ready, or was cleared
 }
 
 export type QueryName = keyof QueryMap

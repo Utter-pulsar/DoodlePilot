@@ -4,7 +4,7 @@ import { DOODLE_PALETTE } from '@shared/constants'
 import { useStore } from '../../store'
 import { api } from '../../lib/bridge'
 import { DoodleBox } from '../../components/doodle/DoodleBox'
-import { primaryField, statusOption, isDoneStatus } from '../../lib/fields'
+import { primaryField, statusOption, isDoneStatus, recordFields } from '../../lib/fields'
 
 const paletteHex = (token?: string): string => (token && DOODLE_PALETTE[token]) || '#FFD23F'
 const stop = (e: { stopPropagation: () => void }): void => e.stopPropagation()
@@ -25,10 +25,18 @@ export function RecordCard({
   const titleValue = pf && record ? String(record.fields[pf.id] ?? '') : ''
   const [draft, setDraft] = useState(titleValue)
   const focused = useRef(false)
+  const taRef = useRef<HTMLTextAreaElement>(null)
   // keep the inline title in sync with external edits (e.g. via the drawer) — unless typing
   useEffect(() => {
     if (!focused.current) setDraft(titleValue)
   }, [titleValue])
+  // grow the title box to fit its wrapped text, so a long name shows in full (never clipped)
+  useEffect(() => {
+    const el = taRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }, [draft])
 
   if (!collection || !record) return null
 
@@ -51,7 +59,7 @@ export function RecordCard({
   const opt = statusOption(collection, record)
   const done = isDoneStatus(collection, record)
   // fields the user pinned to show on the collapsed card (status is already shown above)
-  const showFields = collection.fields.filter(
+  const showFields = recordFields(collection, record).filter(
     (f) => f.showOnCard && !f.primary && f.type !== 'status'
   )
 
@@ -69,7 +77,9 @@ export function RecordCard({
     >
       <DoodleBox className="font-doodle" fill={done ? '--card-done' : '--card'}>
         <div className="space-y-2 p-3">
-          <input
+          <textarea
+            ref={taRef}
+            rows={1}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onFocus={() => {
@@ -80,11 +90,19 @@ export function RecordCard({
               commitTitle()
             }}
             onClick={stop}
+            // Enter commits + blurs (no newline) — the title is one value that just WRAPS to show
+            // in full, instead of being clipped to one line like the old <input>.
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                e.currentTarget.blur()
+              }
+            }}
             // stop the pointer from reaching the card's framer drag-listener, otherwise the
-            // whole-card reorder swallows the click and the input never focuses (can't type)
+            // whole-card reorder swallows the click and the textarea never focuses (can't type)
             onPointerDown={(e) => e.stopPropagation()}
             placeholder="写点什么…"
-            className={`w-full bg-transparent text-base outline-none ${done ? 'line-through opacity-60' : ''}`}
+            className={`w-full resize-none overflow-hidden break-words bg-transparent text-base leading-snug outline-none ${done ? 'line-through opacity-60' : ''}`}
           />
 
           {opt && (
@@ -206,7 +224,13 @@ function CardField({ record, field }: { record: RecordItem; field: FieldDef }): 
     return <div className="text-sm opacity-70">{field.name}：{v ? '✓' : '—'}</div>
   }
 
-  // text / longText / url / number / date / dateRange
+  // multi-line text shows in FULL on the card, wrapping as needed (never truncated/scrolled)
+  if (field.type === 'longText') {
+    const t = typeof v === 'string' ? v : ''
+    return t ? <div className="whitespace-pre-wrap break-words text-sm opacity-70">{t}</div> : null
+  }
+
+  // text / url / number / date / dateRange
   let text = ''
   if (typeof v === 'string') text = field.type === 'date' ? v.slice(0, 10) : v
   else if (typeof v === 'number') text = String(v)

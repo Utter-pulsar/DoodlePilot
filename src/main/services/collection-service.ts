@@ -28,37 +28,140 @@ function nextOrder(db: Database, collectionId: Id): number {
   return items.reduce((m, r) => Math.max(m, r.order + 1), 0)
 }
 
-/** Mirror a relation change onto the reverse field of the linked records. */
+/**
+ * Find (or create) the field on `field`'s target collection that mirrors this relation back to
+ * `sourceCol`. Prefers an EXISTING relation field on the target already pointing at sourceCol —
+ * so a pre-existing "人员" column gets reused and filled in, instead of a duplicate appearing —
+ * otherwise creates one named after sourceCol. Returns the reverse field id + whether it
+ * created/paired anything (so a one-time migration can know if it must persist).
+ */
+function ensureReverseField(
+  db: Database,
+  sourceCol: Collection,
+  field: FieldDef
+): { id?: Id; changed: boolean } {
+  const targetColId = field.config?.targetCollectionId
+  if (!targetColId) return { changed: false }
+  const targetCol = findCollection(db, targetColId)
+  if (!targetCol) return { changed: false }
+
+  // already paired and the partner still exists → use it
+  const paired = field.config?.reverseFieldId
+  if (paired && targetCol.fields.some((f) => f.id === paired)) return { id: paired, changed: false }
+
+  let changed = false
+  // reuse an existing relation field on the target that points back at the source lane
+  let rev = targetCol.fields.find(
+    (f) =>
+      (f.type === 'relation' || f.type === 'person') &&
+      f.id !== field.id &&
+      f.config?.targetCollectionId === sourceCol.id &&
+      (!f.config?.reverseFieldId || f.config.reverseFieldId === field.id)
+  )
+  if (!rev) {
+    rev = {
+      id: newId('fld'),
+      name: sourceCol.name,
+      type: 'relation',
+      config: { targetCollectionId: sourceCol.id, reverseFieldId: field.id }
+    }
+    targetCol.fields.push(rev)
+    targetCol.updatedAt = nowISO()
+    changed = true
+  } else if (rev.config?.reverseFieldId !== field.id) {
+    rev.config = { ...rev.config, targetCollectionId: sourceCol.id, reverseFieldId: field.id }
+    targetCol.updatedAt = nowISO()
+    changed = true
+  }
+  if (field.config?.reverseFieldId !== rev.id) {
+    field.config = { ...field.config, reverseFieldId: rev.id }
+    sourceCol.updatedAt = nowISO()
+    changed = true
+  }
+  return { id: rev.id, changed }
+}
+
+/**
+ * Mirror a relation change onto the (auto-materialized) reverse field of each linked record, and
+ * make that reverse field show up on the linked card (its per-card field set). Returns whether
+ * anything changed, so the startup migration can persist only when needed.
+ */
 function syncReverse(
   db: Database,
+  sourceCol: Collection,
   field: FieldDef,
   fromId: Id,
   before: Id[],
   after: Id[]
-): void {
-  const reverseFieldId = field.config?.reverseFieldId
-  if (!reverseFieldId) return
+): boolean {
+  const { id: reverseFieldId, changed: fieldChanged } = ensureReverseField(db, sourceCol, field)
+  if (!reverseFieldId) return false
+  let changed = fieldChanged
   const added = after.filter((id) => !before.includes(id))
   const removed = before.filter((id) => !after.includes(id))
   for (const targetId of added) {
     const target = findRecord(db, targetId)
     if (!target) continue
+    let touched = false
     const cur = asIdArray(target.fields[reverseFieldId])
-    if (!cur.includes(fromId)) target.fields[reverseFieldId] = [...cur, fromId]
+    if (!cur.includes(fromId)) {
+      target.fields[reverseFieldId] = [...cur, fromId]
+      touched = true
+    }
+    // surface the reverse field on the linked card without touching other cards
+    if (target.fieldIds && !target.fieldIds.includes(reverseFieldId)) {
+      target.fieldIds.push(reverseFieldId)
+      touched = true
+    }
+    if (touched) {
+      target.updatedAt = nowISO()
+      changed = true
+    }
   }
   for (const targetId of removed) {
     const target = findRecord(db, targetId)
     if (!target) continue
-    target.fields[reverseFieldId] = asIdArray(target.fields[reverseFieldId]).filter(
-      (id) => id !== fromId
-    )
+    const cur = asIdArray(target.fields[reverseFieldId])
+    if (cur.includes(fromId)) {
+      target.fields[reverseFieldId] = cur.filter((id) => id !== fromId)
+      target.updatedAt = nowISO()
+      changed = true
+    }
   }
+  return changed
 }
 
 // ---- registration ---------------------------------------------------------
 
 export function registerCollectionService(core: AppCore): void {
   const { store, queries, commands, events, hooks } = core
+
+  // One-time migration for DBs written before per-card field sets + two-way relation
+  // materialization existed. Idempotent: it persists only when it actually changes something,
+  // so later launches are a no-op. Mutates the live snapshot directly, then flushes if dirty.
+  ;(function migrate(): void {
+    const db = store.data
+    let dirty = false
+    // 1) give every legacy record an explicit field set = its lane's current fields
+    for (const r of db.records) {
+      if (!r.fieldIds) {
+        const col = findCollection(db, r.collectionId)
+        r.fieldIds = col ? col.fields.map((f) => f.id) : Object.keys(r.fields)
+        dirty = true
+      }
+    }
+    // 2) materialize reverse links for relations created before two-way materialization
+    for (const r of db.records) {
+      const col = findCollection(db, r.collectionId)
+      if (!col) continue
+      for (const f of col.fields) {
+        if (!isRelationField(f)) continue
+        const vals = asIdArray(r.fields[f.id])
+        if (vals.length && syncReverse(db, col, f, r.id, [], vals)) dirty = true
+      }
+    }
+    if (dirty) store.flush()
+  })()
 
   // ===== queries =====
   queries.register('collections.list', () =>
@@ -186,6 +289,8 @@ export function registerCollectionService(core: AppCore): void {
       id: newId('rec'),
       collectionId,
       fields: hooked.value.fields as Record<Id, FieldValue>,
+      // a new card inherits ALL of the lane's current fields; later additions only reach newer cards
+      fieldIds: col.fields.map((f) => f.id),
       archived: false,
       order: nextOrder(store.data, collectionId),
       createdAt: nowISO(),
@@ -204,11 +309,11 @@ export function registerCollectionService(core: AppCore): void {
       if (fields) {
         for (const [fieldId, value] of Object.entries(fields)) {
           const field = col?.fields.find((f) => f.id === fieldId)
-          if (field && isRelationField(field)) {
+          if (col && field && isRelationField(field)) {
             const before = asIdArray(rec.fields[fieldId])
             const after = asIdArray(value as FieldValue)
             rec.fields[fieldId] = after
-            syncReverse(store.data, field, rec.id, before, after)
+            syncReverse(store.data, col, field, rec.id, before, after)
           } else {
             rec.fields[fieldId] = value as FieldValue
           }
@@ -366,6 +471,7 @@ export function registerCollectionService(core: AppCore): void {
           ...(dateField ? { [dateField.id]: '' } : {}),
           ...(checklist ? { [checklist.id]: carry } : {})
         },
+        fieldIds: col.fields.map((f) => f.id),
         archived: false,
         order: db.records.filter((r) => r.collectionId === fromId).length,
         createdAt: nowISO(),
@@ -401,7 +507,7 @@ export function registerCollectionService(core: AppCore): void {
         : before.filter((x) => x !== toId)
       from.fields[fieldId] = after
       from.updatedAt = nowISO()
-      syncReverse(store.data, field, fromId, before, after)
+      syncReverse(store.data, col, field, fromId, before, after)
     })
     events.emit('records.changed', { collectionId: from.collectionId })
   }
@@ -410,6 +516,64 @@ export function registerCollectionService(core: AppCore): void {
   commands.register('records.unlink', ({ fromId, fieldId, toId }) =>
     linkOp(fromId, fieldId, toId, false)
   )
+
+  // ===== per-card field set =====
+  // add a brand-new field to the lane registry AND attach it to just this one card. New cards
+  // (which inherit the whole registry) get it too; existing cards are untouched.
+  commands.register('records.addField', ({ recordId, field }) => {
+    const rec = findRecord(store.data, recordId)
+    if (!rec) throw new Error(`record ${recordId} not found`)
+    const col = findCollection(store.data, rec.collectionId)
+    if (!col) throw new Error('collection not found')
+    store.mutate(() => {
+      const base = rec.fieldIds ?? col.fields.map((f) => f.id) // this card's set BEFORE adding
+      const newField: FieldDef = { ...field, id: newId('fld') }
+      col.fields.push(newField)
+      col.updatedAt = nowISO()
+      rec.fieldIds = [...base, newField.id]
+      rec.updatedAt = nowISO()
+    })
+    events.emit('collections.changed', store.data.collections)
+    events.emit('records.changed', { collectionId: rec.collectionId })
+    return rec
+  })
+
+  // drop a field from THIS card only (delete its value too). If no card in the lane uses the
+  // field anymore, garbage-collect its definition so future cards stop inheriting it.
+  commands.register('records.removeField', ({ recordId, fieldId }) => {
+    const rec = findRecord(store.data, recordId)
+    if (!rec) throw new Error(`record ${recordId} not found`)
+    const col = findCollection(store.data, rec.collectionId)
+    store.mutate((db) => {
+      const def = col?.fields.find((f) => f.id === fieldId)
+      // a relation: dissolve this card's links through it, cleaning BOTH sides symmetrically so
+      // the other lane is never left pointing back at a link this card no longer has
+      if (col && def && isRelationField(def)) {
+        const before = asIdArray(rec.fields[fieldId])
+        if (before.length) syncReverse(db, col, def, rec.id, before, [])
+      }
+      const base = rec.fieldIds ?? (col ? col.fields.map((f) => f.id) : Object.keys(rec.fields))
+      rec.fieldIds = base.filter((id) => id !== fieldId)
+      delete rec.fields[fieldId]
+      rec.updatedAt = nowISO()
+      // GC a PLAIN field's definition once no card in the lane still uses it (keep the title
+      // field), so future cards stop inheriting it. Relation fields are deliberately NOT GC'd:
+      // dropping one half of a two-way pair could strand its partner on the other lane.
+      if (col && def && !def.primary && !isRelationField(def)) {
+        // a legacy record (no fieldIds) implicitly still uses every field, so keep it then
+        const stillUsed = db.records.some(
+          (r) => r.collectionId === col.id && (r.fieldIds ? r.fieldIds.includes(fieldId) : true)
+        )
+        if (!stillUsed) {
+          col.fields = col.fields.filter((f) => f.id !== fieldId)
+          col.updatedAt = nowISO()
+        }
+      }
+    })
+    events.emit('collections.changed', store.data.collections)
+    events.emit('records.changed', { collectionId: rec.collectionId })
+    return rec
+  })
 
   // ===== semantic task action =====
   commands.register('task.complete', async ({ recordId }) => {

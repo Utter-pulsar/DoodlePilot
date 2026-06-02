@@ -104,6 +104,10 @@ export interface RecordItem extends Timestamped {
   id: Id
   collectionId: Id
   fields: Record<Id, FieldValue>
+  /** which of the collection's fields THIS card shows, in order. A new card inherits ALL of the
+   *  collection's fields at creation; adding a field afterwards only reaches new cards, and each
+   *  card can drop fields on its own. Undefined (legacy) is read as "all of the lane's fields". */
+  fieldIds?: Id[]
   archived: boolean
   order: number
   /** the lane this record was archived FROM, so 恢复 can put it back exactly */

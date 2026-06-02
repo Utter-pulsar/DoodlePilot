@@ -32,3 +32,17 @@ export function isDoneStatus(col: Collection, rec: RecordItem): boolean {
 export function relationFields(col: Collection): FieldDef[] {
   return col.fields.filter((f) => f.type === 'relation' || f.type === 'person')
 }
+
+/**
+ * The fields THIS card displays — its own per-card subset of the lane's fields, in order.
+ * Falls back to all of the collection's fields for legacy records created before per-card sets.
+ */
+export function recordFields(col: Collection, rec: RecordItem): FieldDef[] {
+  if (!rec.fieldIds) return col.fields
+  const byId = new Map(col.fields.map((f) => [f.id, f]))
+  const out = rec.fieldIds.map((id) => byId.get(id)).filter((f): f is FieldDef => !!f)
+  // never let a card lose its title field, even if it was somehow dropped from the set
+  const pf = col.fields.find((f) => f.primary)
+  if (pf && !out.some((f) => f.id === pf.id)) out.unshift(pf)
+  return out
+}

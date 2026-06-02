@@ -24,6 +24,33 @@ CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `
 
 /**
+ * In-place schema upgrades. `migrations[v]` transforms a DB from version v-1 to v; they run in
+ * order, so a DB several versions behind is walked through EACH step (2→3→4→…) and the user's
+ * data is never discarded — the old "version mismatch ⇒ re-seed/wipe" behaviour is gone.
+ *
+ * To evolve the data structure: add a step here AND bump SEED_VERSION in seed.ts. Brand-new
+ * installs are seeded straight at the latest version, so they skip every step. (The per-card
+ * field-set / two-way-relation backfill runs idempotently in collection-service on each launch,
+ * so it is intentionally NOT duplicated here.)
+ */
+type Migration = (db: Database) => void
+const migrations: Record<number, Migration> = {
+  // 3: (db) => { for (const c of db.collections) for (const f of c.fields) f.width ??= 200 },
+}
+
+/** Walk `db.version` up to SEED_VERSION, applying each migration in turn. Returns true if moved. */
+function migrateUp(db: Database): boolean {
+  let moved = false
+  while (db.version < SEED_VERSION) {
+    const next = db.version + 1
+    migrations[next]?.(db)
+    db.version = next
+    moved = true
+  }
+  return moved
+}
+
+/**
  * Persistence backed by a real SQLite file (sql.js / WASM — no native build, so it
  * compiles & ships identically on Windows/macOS/Linux). The whole DB is small and
  * lives in memory; mutations write through to disk (debounced) in one transaction.
@@ -55,21 +82,19 @@ export class Store {
     sql.run(SCHEMA)
 
     let db: Database
-    let fresh = !fileExists
+    let migrated = false
+    const fresh = !fileExists
     if (fileExists) {
       db = Store.read(sql)
-      // structure changed since this DB was written → re-seed (early stage; once real
-      // user data matters this becomes a proper migration instead of a reset)
-      if (db.version < SEED_VERSION) {
-        db = seedDatabase()
-        fresh = true
-      }
+      // upgrade an older DB IN PLACE — never wipe. A DB several versions behind is walked
+      // through each migration step in order, preserving all of the user's data.
+      migrated = migrateUp(db)
     } else {
       db = seedDatabase()
       mkdirSync(dirname(path), { recursive: true })
     }
     const store = new Store(sql, path, db)
-    if (fresh) store.flush() // write the (re)seed immediately
+    if (fresh || migrated) store.flush() // persist a fresh seed or a completed migration
     return store
   }
 

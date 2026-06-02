@@ -1,3 +1,5 @@
+import { mkdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { app, BrowserWindow } from 'electron'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import { APP_NAME } from '@shared/constants'
@@ -6,7 +8,7 @@ import { createAppCore } from './services/context'
 import { registerCollectionService } from './services/collection-service'
 import { registerAlarmService } from './services/alarm-service'
 import { Scheduler } from './services/scheduler'
-import { checkForUpdatesIfEnabled } from './services/updater'
+import { checkForUpdatesIfEnabled, registerUpdater } from './services/updater'
 import { WindowManager } from './windows/window-manager'
 import { registerIpc } from './ipc/register-ipc'
 import { registerIntegrations } from './integrations'
@@ -22,6 +24,14 @@ let scheduler: Scheduler | null = null
 app.whenReady().then(async () => {
   electronApp.setAppUserModelId('com.doodlepilot.app')
   app.setName(APP_NAME)
+  // dev (`npm run dev`) gets its OWN data folder, so hacking on the app never reads or clobbers
+  // the real database of an installed copy on the same machine. Packaged builds are unaffected,
+  // so end users are not impacted. Must run before Store.open() reads app.getPath('userData').
+  if (!app.isPackaged) {
+    const devData = join(app.getPath('appData'), `${APP_NAME}-dev`)
+    mkdirSync(devData, { recursive: true })
+    app.setPath('userData', devData)
+  }
 
   store = await Store.open()
   // keep the OS "launch at login" registration in sync with the persisted setting
@@ -34,6 +44,7 @@ app.whenReady().then(async () => {
   // services register their query/command handlers on the core registries
   registerCollectionService(core)
   registerAlarmService(core)
+  registerUpdater(core) // self-update query/commands + "install only on accept" policy
 
   // windows must exist before events are emitted so broadcast can deliver them
   const windows = new WindowManager(core)

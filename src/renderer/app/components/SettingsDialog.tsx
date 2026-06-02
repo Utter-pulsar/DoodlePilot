@@ -87,7 +87,7 @@ export function SettingsDialog({
                   />
                 </SettingRow>
 
-                <SettingRow label="自动更新" hint="启动时检查并自动下载新版本，退出后自动安装">
+                <SettingRow label="自动更新" hint="启动时检查并自动下载，下载完成后提示你确认更新">
                   <DoodleToggle
                     label="自动更新"
                     checked={!!settings?.autoUpdate}

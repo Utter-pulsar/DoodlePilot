@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import type { FieldType, Id } from '@shared/types'
-import type { RecordWithLinks } from '@shared/types'
 import { useStore } from '../../store'
 import { api } from '../../lib/bridge'
+import { recordFields } from '../../lib/fields'
 import { DoodleButton } from '../../components/doodle/DoodleButton'
 import { FieldEditor } from './FieldEditor'
 
@@ -43,15 +43,11 @@ export function RecordDrawer(): JSX.Element | null {
   const select = useStore((s) => s.selectRecord)
   const record = useStore((s) => (recordId ? s.recordById(recordId) : undefined))
   const collection = useStore((s) => (record ? s.collectionById(record.collectionId) : undefined))
-  const titleOf = useStore((s) => s.titleOf)
-  const [links, setLinks] = useState<RecordWithLinks | null>(null)
-
-  useEffect(() => {
-    if (!recordId) return setLinks(null)
-    void api.query('records.withLinks', { id: recordId }).then(setLinks)
-  }, [recordId, record?.updatedAt])
 
   if (!recordId || !record || !collection) return null
+
+  // only the fields THIS card carries (per-card set) — not the whole lane
+  const fields = recordFields(collection, record)
 
   return (
     <>
@@ -66,7 +62,7 @@ export function RecordDrawer(): JSX.Element | null {
         </header>
 
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 font-doodle">
-          {collection.fields.map((field) => (
+          {fields.map((field) => (
             <div key={field.id}>
               <div className="mb-1 flex items-center gap-2 text-sm opacity-70">
                 <span>{field.name}</span>
@@ -97,12 +93,9 @@ export function RecordDrawer(): JSX.Element | null {
                   {!field.primary && (
                     <button
                       className="opacity-40 hover:opacity-100"
-                      title="删除属性"
+                      title="从这张卡片移除该属性"
                       onClick={() =>
-                        void api.command('collections.removeField', {
-                          collectionId: collection.id,
-                          fieldId: field.id
-                        })
+                        void api.command('records.removeField', { recordId, fieldId: field.id })
                       }
                     >
                       🗑️
@@ -114,31 +107,7 @@ export function RecordDrawer(): JSX.Element | null {
             </div>
           ))}
 
-          <AddProperty collectionId={collection.id} />
-
-          {links && links.backlinks.length > 0 && (
-            <div className="border-t-2 border-dashed border-ink/30 pt-3">
-              <div className="mb-1 text-sm opacity-70">被这些引用：</div>
-              {links.backlinks.map((g) => {
-                const fromCol = useStore.getState().collectionById(g.collectionId)
-                const fromField = fromCol?.fields.find((f) => f.id === g.fieldId)
-                return (
-                  <div key={`${g.collectionId}:${g.fieldId}`} className="mb-2">
-                    <div className="text-xs opacity-50">
-                      {fromCol?.name} · {fromField?.name}
-                    </div>
-                    <div className="flex flex-wrap gap-1">
-                      {g.records.map((r) => (
-                        <button key={r.id} className="doodle-chip bg-card" onClick={() => select(r.id)}>
-                          🔗 {titleOf(r.id)}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          )}
+          <AddProperty recordId={recordId} />
         </div>
 
         <footer className="flex gap-2 border-t-2 border-ink/40 p-3">
@@ -177,7 +146,8 @@ async function renameField(collectionId: Id, fieldId: Id, current: string): Prom
   }
 }
 
-function AddProperty({ collectionId }: { collectionId: Id }): JSX.Element {
+/** Adds a new property to JUST this card (and registers it on the lane for future cards). */
+function AddProperty({ recordId }: { recordId: Id }): JSX.Element {
   const collections = useStore((s) => s.collections)
   const [open, setOpen] = useState(false)
   const [name, setName] = useState('')
@@ -199,8 +169,8 @@ function AddProperty({ collectionId }: { collectionId: Id }): JSX.Element {
         targetCollectionId = target || collections[0]?.id
       }
     }
-    await api.command('collections.addField', {
-      collectionId,
+    await api.command('records.addField', {
+      recordId,
       field: {
         name: fieldName,
         type,

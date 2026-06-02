@@ -41,6 +41,12 @@ export function FieldEditor({
     void api.command('records.update', { id: record.id, fields: { [field.id]: v } })
   }
 
+  // the title field often holds a long name — let it WRAP and auto-grow here too (matching the
+  // card title), instead of clipping to one line like a plain text input.
+  if (field.primary) {
+    return <TextArea value={String(value ?? '')} onCommit={commit} />
+  }
+
   switch (field.type) {
     case 'longText':
       return <TextArea value={String(value ?? '')} onCommit={commit} />
@@ -82,9 +88,18 @@ export function FieldEditor({
 
 function TextArea({ value, onCommit }: { value: string; onCommit: (v: string) => void }): JSX.Element {
   const [draft, setDraft] = useState(value)
+  const ref = useRef<HTMLTextAreaElement>(null)
+  // grow to fit ALL the text — every line stays visible and wraps, no inner scrollbar
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }, [draft])
   return (
     <textarea
-      className={`${inputCls} min-h-[70px] resize-y`}
+      ref={ref}
+      className={`${inputCls} min-h-[44px] resize-none overflow-hidden break-words leading-snug`}
       value={draft}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={() => onCommit(draft)}

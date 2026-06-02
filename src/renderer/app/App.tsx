@@ -10,6 +10,7 @@ import { CardContextMenu } from './features/table/CardContextMenu'
 import { AlarmPanel } from './features/alarm/AlarmPanel'
 import { TitleBar } from './components/TitleBar'
 import { DoodleDialog } from './components/DoodleDialog'
+import { UpdatePrompt } from './components/UpdatePrompt'
 import logoUrl from '@assets/logo.png'
 
 type Tab = 'board' | 'alarms'
@@ -100,6 +101,7 @@ export default function App(): JSX.Element {
       </main>
 
       <DoodleDialog />
+      <UpdatePrompt />
     </div>
   )
 }

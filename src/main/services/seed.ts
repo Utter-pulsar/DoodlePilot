@@ -9,7 +9,9 @@ import type { Database } from './store'
 //   - archiving a card moves it to a "<lane>-历史" lane (auto-created)
 // Everything here is fully editable by the user afterwards.
 
-// bump when the seed STRUCTURE changes; the store re-seeds an older DB on next launch
+// The current schema version. seedDatabase() stamps it on brand-new installs; store.ts walks an
+// OLDER DB up to it via in-place `migrations` (it never wipes). When you change the data
+// structure, bump this AND add the matching migration step in store.ts.
 export const SEED_VERSION = 2
 
 function status(label: string, color: string): SelectOption {
