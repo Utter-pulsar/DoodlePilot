@@ -22,7 +22,7 @@ export function TitleBar(): JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false)
   const [aboutOpen, setAboutOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [info, setInfo] = useState<{ name: string; version: string } | null>(null)
+  const [info, setInfo] = useState<{ name: string; version: string; author: string } | null>(null)
 
   useEffect(() => {
     void api.query('app.info', undefined).then(setInfo)
@@ -124,6 +124,7 @@ export function TitleBar(): JSX.Element {
                   <img src={logoUrl} alt="" className="h-14 w-14" />
                   <div className="text-2xl font-bold">{info?.name ?? 'DoodlePilot'}</div>
                   <div className="text-base opacity-70">版本 {info?.version ?? '…'}</div>
+                  <div className="text-sm opacity-50">作者 {info?.author ?? 'Utter_pulsar'}</div>
                   <button
                     onClick={() => setAboutOpen(false)}
                     className="mt-2 rounded-[8px] border-2 border-ink px-5 py-1 text-base hover:bg-marker-yellow/40"

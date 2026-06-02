@@ -86,7 +86,7 @@ sudo codesign --force --deep --sign - /Applications/DoodlePilot.ap
 如果你下载的是deb的版本的话，请根据下面的步骤来设置沙箱的setuid以及icon图标。
 
 ```bash
-DEB=./doodlepilot_0.1.0_amd64.deb
+DEB=./doodlepilot_x.x.x_amd64.deb
 
 sudo apt install -y "$DEB"                                    # 装（自动拉依赖；deb前必须带 ./）
 sudo chmod 4755 /opt/DoodlePilot/chrome-sandbox              # 坑①：沙箱补 setuid，否则打不开

@@ -8,7 +8,7 @@ import { createAppCore } from './services/context'
 import { registerCollectionService } from './services/collection-service'
 import { registerAlarmService } from './services/alarm-service'
 import { Scheduler } from './services/scheduler'
-import { checkForUpdatesIfEnabled, registerUpdater } from './services/updater'
+import { registerUpdater } from './services/updater'
 import { WindowManager } from './windows/window-manager'
 import { registerIpc } from './ipc/register-ipc'
 import { registerIntegrations } from './integrations'
@@ -57,9 +57,6 @@ app.whenReady().then(async () => {
   scheduler.start()
 
   windows.createAll()
-
-  // startup auto-update: checks GitHub for a newer release if the user enabled it (packaged only)
-  checkForUpdatesIfEnabled(core)
 
   app.on('browser-window-created', (_e, win) => optimizer.watchWindowShortcuts(win))
 

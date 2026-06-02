@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { Alarm, Collection, Id, RecordItem } from '@shared/types'
+import type { UpdateStatus } from '@shared/api/contract'
 import { titleOfRecord } from './lib/fields'
 import { api } from './lib/bridge'
 
@@ -48,10 +49,10 @@ interface DoodleState {
   askPrompt: (title: string, defaultValue?: string) => Promise<string | null>
   askConfirm: (title: string) => Promise<boolean>
 
-  /** a downloaded app update awaiting the user's OK (null = none / dismissed / auto-update off) */
-  updateVersion: string | null
-  installUpdate: () => void
-  dismissUpdate: () => void
+  /** self-update progress, shown under the home title. The whole flow (check → download →
+   *  install → relaunch) runs automatically once the user presses 检查更新 in Settings. */
+  updateStatus: UpdateStatus
+  checkForUpdate: () => void
 
   init: () => Promise<void>
   reloadRecords: () => Promise<void>
@@ -99,20 +100,18 @@ export const useStore = create<DoodleState>((set, get) => ({
       set({ dialog: { kind: 'confirm', title, defaultValue: '', resolve: (v) => resolve(!!v) } })
     ),
 
-  updateVersion: null,
-  installUpdate: () => void api.command('update.install', undefined),
-  dismissUpdate: () => {
-    void api.command('update.dismiss', undefined) // tell main to suppress until the next launch
-    set({ updateVersion: null })
+  updateStatus: { phase: 'idle' },
+  checkForUpdate: () => {
+    set({ updateStatus: { phase: 'checking' } }) // optimistic, so the button reacts instantly
+    void api.command('update.check', undefined)
   },
 
   init: async () => {
-    const [collections, alarms, pendingUpdate] = await Promise.all([
+    const [collections, alarms] = await Promise.all([
       api.query('collections.list', undefined),
-      api.query('alarms.list', undefined),
-      api.query('update.pending', undefined)
+      api.query('alarms.list', undefined)
     ])
-    set({ collections, alarms, updateVersion: pendingUpdate?.version ?? null })
+    set({ collections, alarms })
     await get().reloadRecords()
     set({ ready: true })
 
@@ -123,7 +122,7 @@ export const useStore = create<DoodleState>((set, get) => ({
     })
     api.on('records.changed', () => void get().reloadRecords())
     api.on('alarms.changed', (alarms) => set({ alarms }))
-    api.on('update.changed', (u) => set({ updateVersion: u?.version ?? null }))
+    api.on('update.status', (status) => set({ updateStatus: status }))
   },
 
   reloadRecords: async () => {

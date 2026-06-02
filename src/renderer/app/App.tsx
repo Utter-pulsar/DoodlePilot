@@ -10,7 +10,7 @@ import { CardContextMenu } from './features/table/CardContextMenu'
 import { AlarmPanel } from './features/alarm/AlarmPanel'
 import { TitleBar } from './components/TitleBar'
 import { DoodleDialog } from './components/DoodleDialog'
-import { UpdatePrompt } from './components/UpdatePrompt'
+import { UpdateProgress } from './components/UpdateProgress'
 import logoUrl from '@assets/logo.png'
 
 type Tab = 'board' | 'alarms'
@@ -57,7 +57,10 @@ export default function App(): JSX.Element {
           eaten by the overlay (which would just close the form, needing a second click). */}
       <header className="relative z-30 flex items-center gap-3 border-b-2 border-ink/80 px-5 py-3">
         <img src={logoUrl} alt="DoodlePilot" className="h-8 w-8" />
-        <h1 className="font-doodle text-2xl font-bold">DoodlePilot</h1>
+        <div className="flex flex-col">
+          <h1 className="font-doodle text-2xl font-bold leading-none">DoodlePilot</h1>
+          <UpdateProgress />
+        </div>
 
         <nav className="ml-6 flex gap-2">
           <DoodleButton variant={tab === 'board' ? 'primary' : 'ghost'} onClick={() => switchTab('board')}>
@@ -101,7 +104,6 @@ export default function App(): JSX.Element {
       </main>
 
       <DoodleDialog />
-      <UpdatePrompt />
     </div>
   )
 }

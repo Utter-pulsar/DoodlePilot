@@ -5,6 +5,7 @@ import type {
   ChecklistItem,
   Collection,
   DateRangeValue,
+  FieldConfig,
   FieldDef,
   Id,
   RecordItem,
@@ -264,19 +265,44 @@ function SelectEditor({
     })
   }
 
+  // delete a tag from the field definition (so it disappears everywhere this field is used)
+  const removeOption = async (optId: Id): Promise<void> => {
+    const opt = options.find((o) => o.id === optId)
+    const ok = await useStore
+      .getState()
+      .askConfirm(`删除标签「${opt?.label ?? ''}」？该分类里所有卡片上的这个标签都会被移除。`)
+    if (!ok) return
+    const config: FieldConfig = { ...field.config, options: options.filter((o) => o.id !== optId) }
+    if (config.doneOptionIds) config.doneOptionIds = config.doneOptionIds.filter((id) => id !== optId)
+    void api.command('collections.updateField', {
+      collectionId: collection.id,
+      fieldId: field.id,
+      patch: { config }
+    })
+  }
+
   return (
     <div className="flex flex-wrap items-center gap-1">
       {options.map((o) => {
         const on = selected.includes(o.id)
         return (
-          <button
+          <span
             key={o.id}
-            onClick={() => toggle(o.id)}
             className={`doodle-chip ${on ? 'text-[#2B2B2B]' : ''}`}
             style={{ backgroundColor: on ? hex(o.color) : 'transparent', opacity: on ? 1 : 0.6 }}
           >
-            {o.label}
-          </button>
+            <button type="button" onClick={() => toggle(o.id)} className="outline-none">
+              {o.label}
+            </button>
+            <button
+              type="button"
+              onClick={() => void removeOption(o.id)}
+              className="-mr-0.5 opacity-50 hover:opacity-100"
+              title="删除这个标签"
+            >
+              ✕
+            </button>
+          </span>
         )
       })}
       <button onClick={addOption} className="doodle-chip border-dashed">
@@ -310,43 +336,92 @@ function ChecklistEditor({
 
   return (
     <div className="space-y-1">
-      {items.map((it) => {
-        const opt = optOf(it.status)
-        return (
-          <div key={it.id} className="flex items-center gap-1">
-            <button
-              onClick={() => cycle(it)}
-              className="doodle-chip shrink-0 text-[#2B2B2B]"
-              style={{ backgroundColor: opt ? hex(opt.color) : 'transparent' }}
-              title="点击切换状态"
-            >
-              {opt?.label ?? '状态'}
-            </button>
-            <input
-              value={it.text}
-              onChange={(e) =>
-                onCommit(items.map((x) => (x.id === it.id ? { ...x, text: e.target.value } : x)))
-              }
-              placeholder="任务内容…"
-              className={`flex-1 rounded-[8px] border-2 border-ink bg-card px-2 py-1 outline-none ${
-                isDone(it.status) ? 'line-through opacity-60' : ''
-              }`}
-            />
-            <button
-              onClick={() => onCommit(items.filter((x) => x.id !== it.id))}
-              className="opacity-40 hover:opacity-100"
-              title="删除任务"
-            >
-              🗑️
-            </button>
-          </div>
-        )
-      })}
+      {items.map((it) => (
+        <ChecklistItemRow
+          key={it.id}
+          item={it}
+          opt={optOf(it.status)}
+          done={isDone(it.status)}
+          onCycle={() => cycle(it)}
+          onChangeText={(text) => onCommit(items.map((x) => (x.id === it.id ? { ...x, text } : x)))}
+          onDelete={() => onCommit(items.filter((x) => x.id !== it.id))}
+        />
+      ))}
       <button
         onClick={() => onCommit([...items, { id: newId('ck'), text: '', status: options[0]?.id }])}
         className="doodle-chip border-dashed"
       >
         ＋ 添加任务
+      </button>
+    </div>
+  )
+}
+
+/**
+ * One checklist row. The task text uses a LOCAL draft committed on BLUR (not on every keystroke):
+ * the old per-keystroke onCommit re-rendered the parent and reset the input mid-composition, so a
+ * Chinese IME leaked its pinyin buffer (typing "看"+空格 produced "kkakan看"). It's a textarea that
+ * auto-grows + wraps, so a long task name shows in full instead of being clipped.
+ */
+function ChecklistItemRow({
+  item,
+  opt,
+  done,
+  onCycle,
+  onChangeText,
+  onDelete
+}: {
+  item: ChecklistItem
+  opt: SelectOption | undefined
+  done: boolean
+  onCycle: () => void
+  onChangeText: (text: string) => void
+  onDelete: () => void
+}): JSX.Element {
+  const [draft, setDraft] = useState(item.text)
+  const focused = useRef(false)
+  const ref = useRef<HTMLTextAreaElement>(null)
+  // pull external edits in unless the user is actively typing in this row
+  useEffect(() => {
+    if (!focused.current) setDraft(item.text)
+  }, [item.text])
+  // grow to fit the wrapped text (no inner scrollbar)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }, [draft])
+
+  return (
+    <div className="flex items-start gap-1">
+      <button
+        onClick={onCycle}
+        className="doodle-chip mt-0.5 shrink-0 text-[#2B2B2B]"
+        style={{ backgroundColor: opt ? hex(opt.color) : 'transparent' }}
+        title="点击切换状态"
+      >
+        {opt?.label ?? '状态'}
+      </button>
+      <textarea
+        ref={ref}
+        rows={1}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onFocus={() => {
+          focused.current = true
+        }}
+        onBlur={() => {
+          focused.current = false
+          if (draft !== item.text) onChangeText(draft)
+        }}
+        placeholder="任务内容…"
+        className={`min-h-[36px] flex-1 resize-none overflow-hidden break-words rounded-[8px] border-2 border-ink bg-card px-2 py-1 leading-snug outline-none ${
+          done ? 'line-through opacity-60' : ''
+        }`}
+      />
+      <button onClick={onDelete} className="mt-1.5 opacity-40 hover:opacity-100" title="删除任务">
+        🗑️
       </button>
     </div>
   )

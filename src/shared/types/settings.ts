@@ -6,8 +6,6 @@ export interface AppSettings {
   runInBackground: boolean
   /** when true, DoodlePilot launches automatically at OS login (only applied in a packaged build) */
   launchAtLogin: boolean
-  /** when true, the app checks GitHub for a newer release on startup and auto-installs it (packaged only) */
-  autoUpdate: boolean
 }
 
 /**
@@ -17,7 +15,5 @@ export interface AppSettings {
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'paper',
   runInBackground: false,
-  launchAtLogin: false,
-  // opt-in: off by default; the user enables it in the Settings dialog
-  autoUpdate: false
+  launchAtLogin: false
 }

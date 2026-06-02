@@ -28,12 +28,21 @@ export type QueryMap = {
   'records.withLinks': { input: { id: Id }; result: RecordWithLinks | null }
   'alarms.list': { input: void; result: Alarm[] }
   'overlay.layout': { input: void; result: OverlayLayout }
-  'app.info': { input: void; result: { name: string; version: string } }
+  'app.info': { input: void; result: { name: string; version: string; author: string } }
   'settings.get': { input: void; result: AppSettings }
   'window.isMaximized': { input: void; result: boolean }
-  // a downloaded, ready-to-install update (null = none / dismissed / auto-update off)
-  'update.pending': { input: void; result: { version: string } | null }
 }
+
+/** The self-update flow's progress, pushed main → renderer as `update.status`. The home screen
+ *  shows it under the "DoodlePilot" title; the whole flow runs automatically after the user
+ *  presses 检查更新 (check → download → install → relaunch). */
+export type UpdateStatus =
+  | { phase: 'idle' }
+  | { phase: 'checking' }
+  | { phase: 'downloading'; percent: number; version?: string }
+  | { phase: 'none' } // already on the latest version
+  | { phase: 'installing'; version: string } // download done → quitting to install + relaunch
+  | { phase: 'error'; message: string }
 
 export type CommandMap = {
   // ---- collections (lanes) ----
@@ -72,6 +81,14 @@ export type CommandMap = {
   // lane definition once no card uses it).
   'records.addField': { input: { recordId: Id; field: Omit<FieldDef, 'id'> }; result: RecordItem }
   'records.removeField': { input: { recordId: Id; fieldId: Id }; result: RecordItem }
+  // reorder THIS card's fields (per-card order lives in RecordItem.fieldIds; primary stays first)
+  'records.reorderFields': { input: { recordId: Id; orderedFieldIds: Id[] }; result: RecordItem }
+  // show/hide a field on the collapsed card for THIS card; applyToLane=true makes it the lane
+  // default (FieldDef.showOnCard) and clears every card's per-card override for that field
+  'records.setFieldCardVisible': {
+    input: { recordId: Id; fieldId: Id; visible: boolean; applyToLane?: boolean }
+    result: RecordItem
+  }
 
   // ---- semantic task actions (these run hooks + may drive the desktop) ----
   'task.complete': { input: { recordId: Id }; result: RecordItem }
@@ -98,9 +115,10 @@ export type CommandMap = {
   // launchAtLogin) before returning.
   'settings.update': { input: { patch: Partial<AppSettings> }; result: AppSettings }
 
-  // ---- app self-update (electron-updater); both gated by the autoUpdate setting ----
-  'update.install': { input: void; result: void } // user accepted → quit + install + relaunch
-  'update.dismiss': { input: void; result: void } // "稍后" → suppress until the next launch
+  // ---- app self-update (electron-updater) ----
+  // manual, fully-automatic: check → download → install → relaunch. Progress arrives via the
+  // `update.status` event (shown under the home title). Packaged Win/Linux only.
+  'update.check': { input: void; result: void }
 }
 
 export type EventMap = {
@@ -111,7 +129,7 @@ export type EventMap = {
   'alarm.ring': { alarmId: Id; label: string } // renderer plays a sound on this
   'toast': { kind: 'info' | 'success' | 'error'; message: string }
   'window.maximized': boolean // main → renderer: the main window's maximized state changed
-  'update.changed': { version: string } | null // a downloaded update is ready, or was cleared
+  'update.status': UpdateStatus // self-update progress (checking / downloading / installing / …)
 }
 
 export type QueryName = keyof QueryMap

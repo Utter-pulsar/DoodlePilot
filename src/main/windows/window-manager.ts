@@ -4,7 +4,6 @@ import { is } from '@electron-toolkit/utils'
 import type { EventMap } from '@shared/api/contract'
 import { IPC } from '@shared/api/channels'
 import type { AppCore } from '../services/context'
-import { checkForUpdatesIfEnabled, clearPendingUpdate } from '../services/updater'
 
 const PRELOAD = join(__dirname, '../preload/index.js')
 
@@ -59,7 +58,11 @@ export class WindowManager {
     }))
 
     // app metadata for the title-bar "版本" popup (also queryable by a future AI/harness)
-    core.queries.register('app.info', () => ({ name: 'DoodlePilot', version: app.getVersion() }))
+    core.queries.register('app.info', () => ({
+      name: 'DoodlePilot',
+      version: app.getVersion(),
+      author: 'Utter_pulsar'
+    }))
 
     // custom (renderer-drawn) window controls for the frameless Win/Linux window
     core.commands.register('window.minimize', () => this.main?.minimize())
@@ -85,10 +88,6 @@ export class WindowManager {
       }
       // create/destroy the tray to match the new run-in-background state
       if (patch.runInBackground !== undefined) this.syncTray()
-      // auto-update toggled ON → check right away; toggled OFF → drop any pending prompt and
-      // never surface/install it again until it's re-enabled
-      if (patch.autoUpdate === true) checkForUpdatesIfEnabled(core)
-      else if (patch.autoUpdate === false) clearPendingUpdate(core)
       return { ...core.store.data.settings }
     })
   }

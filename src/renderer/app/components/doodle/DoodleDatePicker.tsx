@@ -12,17 +12,21 @@ function dateParts(iso: string): { year: number; md: string } {
   return { year: d.getUTCFullYear(), md: `${d.getUTCMonth() + 1}月${d.getUTCDate()}日` }
 }
 
-/** The clickable date field (📅 + label + clear). `active` highlights the one whose calendar is open. */
+/** The clickable date field (📅 + label + clear). `active` highlights the one whose calendar is
+ *  open. `oneLine` keeps a single date on ONE line (年月日 together); a date-range's two narrow
+ *  side-by-side fields leave it off so each stacks year-over-month-day. */
 export function DateTrigger({
   value,
   placeholder = '选择日期',
   active = false,
+  oneLine = false,
   onToggle,
   onClear
 }: {
   value: string | null
   placeholder?: string
   active?: boolean
+  oneLine?: boolean
   onToggle: () => void
   onClear?: () => void
 }): JSX.Element {
@@ -40,10 +44,16 @@ export function DateTrigger({
       >
         <span className="shrink-0">📅</span>
         {parts ? (
-          <span className="flex flex-col leading-tight">
-            <span>{parts.year}年</span>
-            <span>{parts.md}</span>
-          </span>
+          oneLine ? (
+            <span className="truncate">
+              {parts.year}年{parts.md}
+            </span>
+          ) : (
+            <span className="flex flex-col leading-tight">
+              <span>{parts.year}年</span>
+              <span>{parts.md}</span>
+            </span>
+          )
         ) : (
           <span className="opacity-50">{placeholder}</span>
         )}
@@ -179,6 +189,7 @@ export function DoodleDatePicker({
         value={value}
         placeholder={placeholder}
         active={open}
+        oneLine
         onToggle={() => setOpen((o) => !o)}
         onClear={() => onChange(null)}
       />

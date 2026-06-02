@@ -108,6 +108,10 @@ export interface RecordItem extends Timestamped {
    *  collection's fields at creation; adding a field afterwards only reaches new cards, and each
    *  card can drop fields on its own. Undefined (legacy) is read as "all of the lane's fields". */
   fieldIds?: Id[]
+  /** per-card override for whether a field is shown on the COLLAPSED card: keyed by field id,
+   *  true = show here, false = hide here. A field with no entry follows the lane default
+   *  (`FieldDef.showOnCard`). "应用到全部" clears these and writes the lane default instead. */
+  cardFieldVisible?: Record<Id, boolean>
   archived: boolean
   order: number
   /** the lane this record was archived FROM, so 恢复 can put it back exactly */

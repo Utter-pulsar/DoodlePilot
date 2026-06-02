@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import type { AppSettings } from '@shared/types'
 import { api } from '../lib/bridge'
+import { useStore } from '../store'
 import { DoodleBox } from './doodle/DoodleBox'
 import { ModalScrim } from './ModalScrim'
 import { DoodleToggle } from './doodle/DoodleToggle'
@@ -40,10 +41,31 @@ export function SettingsDialog({
   onClose: () => void
 }): JSX.Element {
   const [settings, setSettings] = useState<AppSettings | null>(null)
+  const updateStatus = useStore((s) => s.updateStatus)
+  const checkForUpdate = useStore((s) => s.checkForUpdate)
 
   useEffect(() => {
     if (open) void api.query('settings.get', undefined).then(setSettings)
   }, [open])
+
+  const updateBusy =
+    updateStatus.phase === 'checking' ||
+    updateStatus.phase === 'downloading' ||
+    updateStatus.phase === 'installing'
+  const updateLabel =
+    updateStatus.phase === 'checking'
+      ? '检查中…'
+      : updateStatus.phase === 'downloading'
+        ? `下载中 ${updateStatus.percent}%`
+        : updateStatus.phase === 'installing'
+          ? '即将重启安装…'
+          : '检查更新'
+  const updateHint =
+    updateStatus.phase === 'none'
+      ? '已是最新版本 ✓'
+      : updateStatus.phase === 'error'
+        ? `更新失败：${updateStatus.message}`
+        : '点击后自动检查、下载、安装并重启（仅安装版）'
 
   const update = (patch: Partial<AppSettings>): void => {
     setSettings((s) => (s ? { ...s, ...patch } : s)) // optimistic — the switch moves at once
@@ -87,12 +109,14 @@ export function SettingsDialog({
                   />
                 </SettingRow>
 
-                <SettingRow label="自动更新" hint="启动时检查并自动下载，下载完成后提示你确认更新">
-                  <DoodleToggle
-                    label="自动更新"
-                    checked={!!settings?.autoUpdate}
-                    onChange={(v) => update({ autoUpdate: v })}
-                  />
+                <SettingRow label="检查更新" hint={updateHint}>
+                  <button
+                    onClick={checkForUpdate}
+                    disabled={updateBusy}
+                    className="rounded-[8px] border-2 border-ink px-3 py-1 text-sm hover:bg-marker-yellow/40 disabled:opacity-50"
+                  >
+                    {updateLabel}
+                  </button>
                 </SettingRow>
 
                 <button

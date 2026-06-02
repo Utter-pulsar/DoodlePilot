@@ -58,9 +58,14 @@ export function RecordCard({
 
   const opt = statusOption(collection, record)
   const done = isDoneStatus(collection, record)
-  // fields the user pinned to show on the collapsed card (status is already shown above)
+  // fields shown on the collapsed card (status is already shown above). A field is visible if this
+  // card's per-card override says so, else it follows the lane default (showOnCard).
+  const cardVisible = (f: FieldDef): boolean => {
+    const ov = record.cardFieldVisible?.[f.id]
+    return ov === undefined ? !!f.showOnCard : ov
+  }
   const showFields = recordFields(collection, record).filter(
-    (f) => f.showOnCard && !f.primary && f.type !== 'status'
+    (f) => !f.primary && f.type !== 'status' && cardVisible(f)
   )
 
   return (
