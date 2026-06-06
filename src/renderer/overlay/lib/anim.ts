@@ -60,6 +60,18 @@ class TweenManager {
     }
   }
 
+  /** Drop every tween targeting `target`, resolving each so an awaiting caller can finish. */
+  cancel(target: object): void {
+    const t = target as Record<string, number>
+    for (let i = this.active.length - 1; i >= 0; i--) {
+      if (this.active[i].target === t) {
+        const tw = this.active[i]
+        this.active.splice(i, 1)
+        tw.resolve()
+      }
+    }
+  }
+
   clear(): void {
     this.active = []
   }

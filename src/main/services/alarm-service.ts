@@ -29,9 +29,8 @@ function remainingSuffix(alarm: Alarm, now: Date): string {
 }
 
 /**
- * Fire an alarm: fly the banner across the top of the screen, and ask the renderer to
- * play a sound. (No OS notification — the plane/banner IS the reminder.)
- * Shared by the scheduler and the `alarms.test` command.
+ * Fire an alarm: fly the banner across the top of the screen. (No sound, no OS notification —
+ * the plane/banner IS the reminder.) Shared by the scheduler and the `alarms.test` command.
  */
 export async function fireAlarm(core: AppCore, alarm: Alarm, source = 'scheduler'): Promise<void> {
   const gate = await core.hooks.run('alarm.beforeTrigger', alarm, { source })
@@ -42,7 +41,6 @@ export async function fireAlarm(core: AppCore, alarm: Alarm, source = 'scheduler
   const text = (resolved.value.text || defaultText) + remainingSuffix(alarm, new Date())
 
   await core.commands.execute('banner.show', { id: newId('ban'), text, color: 'marker-coral' })
-  core.events.emit('alarm.ring', { alarmId: alarm.id, label: text })
   // one-shot ('once') alarms are auto-deleted by the scheduler once their time has passed
 }
 

@@ -4,6 +4,7 @@ import { api } from '../lib/bridge'
 import { DoodleBox } from './doodle/DoodleBox'
 import { ModalScrim } from './ModalScrim'
 import { SettingsDialog } from './SettingsDialog'
+import { ScreenshotTranslateDialog } from './ScreenshotTranslateDialog'
 import logoUrl from '@assets/logo.png'
 
 const TITLEBAR_H = 44 // height of the draggable title-bar strip
@@ -22,6 +23,7 @@ export function TitleBar(): JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false)
   const [aboutOpen, setAboutOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [screenshotOpen, setScreenshotOpen] = useState(false)
   const [info, setInfo] = useState<{ name: string; version: string; author: string } | null>(null)
 
   useEffect(() => {
@@ -79,7 +81,8 @@ export function TitleBar(): JSX.Element {
                 <button
                   onClick={() => {
                     setMenuOpen(false)
-                    setAboutOpen(false) // switch directly if the other dialog is already open
+                    setAboutOpen(false) // switch directly if another dialog is already open
+                    setScreenshotOpen(false)
                     setSettingsOpen(true)
                   }}
                   className="flex w-full items-center gap-2 rounded-[6px] px-3 py-1.5 text-left text-base hover:bg-marker-yellow/40"
@@ -89,7 +92,19 @@ export function TitleBar(): JSX.Element {
                 <button
                   onClick={() => {
                     setMenuOpen(false)
-                    setSettingsOpen(false) // switch directly if the other dialog is already open
+                    setSettingsOpen(false)
+                    setAboutOpen(false)
+                    setScreenshotOpen(true)
+                  }}
+                  className="flex w-full items-center gap-2 rounded-[6px] px-3 py-1.5 text-left text-base hover:bg-marker-yellow/40"
+                >
+                  🌐 截屏翻译
+                </button>
+                <button
+                  onClick={() => {
+                    setMenuOpen(false)
+                    setSettingsOpen(false) // switch directly if another dialog is already open
+                    setScreenshotOpen(false)
                     setAboutOpen(true)
                   }}
                   className="flex w-full items-center gap-2 rounded-[6px] px-3 py-1.5 text-left text-base hover:bg-marker-yellow/40"
@@ -139,6 +154,7 @@ export function TitleBar(): JSX.Element {
       </AnimatePresence>
 
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <ScreenshotTranslateDialog open={screenshotOpen} onClose={() => setScreenshotOpen(false)} />
     </>
   )
 }

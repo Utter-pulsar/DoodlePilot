@@ -16,6 +16,7 @@ import { DOODLE_PALETTE, PALETTE_TOKENS } from '@shared/constants'
 import { useStore } from '../../store'
 import { api } from '../../lib/bridge'
 import { cssColor } from '../../lib/theme'
+import { useAutoGrow } from '../../lib/useAutoGrow'
 import { DoodleNumber } from '../../components/doodle/DoodleNumber'
 import {
   DoodleDatePicker,
@@ -90,13 +91,9 @@ export function FieldEditor({
 function TextArea({ value, onCommit }: { value: string; onCommit: (v: string) => void }): JSX.Element {
   const [draft, setDraft] = useState(value)
   const ref = useRef<HTMLTextAreaElement>(null)
-  // grow to fit ALL the text — every line stays visible and wraps, no inner scrollbar
-  useEffect(() => {
-    const el = ref.current
-    if (!el) return
-    el.style.height = 'auto'
-    el.style.height = `${el.scrollHeight}px`
-  }, [draft])
+  // grow to fit ALL the text — every line stays visible and wraps, no inner scrollbar — and
+  // re-fit when the panel width changes so the text re-wraps cleanly (see useAutoGrow)
+  useAutoGrow(ref, draft)
   return (
     <textarea
       ref={ref}
@@ -385,13 +382,8 @@ function ChecklistItemRow({
   useEffect(() => {
     if (!focused.current) setDraft(item.text)
   }, [item.text])
-  // grow to fit the wrapped text (no inner scrollbar)
-  useEffect(() => {
-    const el = ref.current
-    if (!el) return
-    el.style.height = 'auto'
-    el.style.height = `${el.scrollHeight}px`
-  }, [draft])
+  // grow to fit the wrapped text (no inner scrollbar), re-fitting on panel-width changes too
+  useAutoGrow(ref, draft)
 
   return (
     <div className="flex items-start gap-1">

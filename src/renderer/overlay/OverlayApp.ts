@@ -51,7 +51,22 @@ export class OverlayApp {
       this.applyLayout()
     })
 
+    // The ticker is rAF-driven, so it PAUSES whenever the OS stops painting this window — the
+    // display sleeping, the monitor turning off, or the machine suspending. Meanwhile alarm
+    // banners keep arriving over IPC and queue up motionless at their entry point. Without this
+    // guard they'd all release together the instant you wake the screen ("come back, jiggle the
+    // mouse, and a day's worth of reminders fly past at once"). A big wall-clock gap between
+    // frames means we just resumed from such a pause → drop the whole backlog instead.
+    let lastTickWall = Date.now()
+    const RESUME_GAP_MS = 4000
     this.app.ticker.add((ticker: Ticker) => {
+      const wall = Date.now()
+      const gap = wall - lastTickWall
+      lastTickWall = wall
+      if (gap > RESUME_GAP_MS) {
+        this.bannerScene.clearAll()
+        return
+      }
       tweens.update(ticker.deltaMS)
       this.bannerScene.update(ticker.deltaMS)
     })

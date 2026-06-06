@@ -5,6 +5,7 @@ import { newId } from '@shared/types'
 import { useStore } from '../../store'
 import { api } from '../../lib/bridge'
 import { useElasticDrag } from '../../lib/useElasticDrag'
+import { useDoodleScrollbar } from '../../lib/useDoodleScrollbar'
 import { DoodleButton } from '../../components/doodle/DoodleButton'
 import { DoodleBox } from '../../components/doodle/DoodleBox'
 import { LaneColumn } from './LaneColumn'
@@ -24,6 +25,7 @@ export function TableView(): JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null)
   const innerRef = useRef<HTMLDivElement>(null)
   useElasticDrag(scrollRef, innerRef, 'x')
+  useDoodleScrollbar(scrollRef, 'x')
 
   // sync local order with the store; keep the user's drag order unless the set changes
   useEffect(() => {

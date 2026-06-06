@@ -41,7 +41,10 @@ function fireInstants(alarm: Alarm, now: Date): { time: Date; key: string }[] {
 
 export class Scheduler {
   private cron: Cron | null = null
-  private readonly fired = new Set<string>()
+  // instant key -> the instant's fire time (ms). A Map (not a Set) so we can age entries out by
+  // time instead of wiping the whole thing — wiping mid-window could un-dedup an instant that's
+  // still inside its ±tolerance window and fire it twice.
+  private readonly fired = new Map<string, number>()
 
   constructor(private readonly core: AppCore) {}
 
@@ -58,19 +61,24 @@ export class Scheduler {
 
   private async tick(): Promise<void> {
     const now = new Date()
+    // Always fire on time, whether or not anyone's watching — an alarm is an alarm. If the display
+    // is asleep the overlay simply can't paint, so banners pile up motionless; the overlay discards
+    // that backlog the moment it wakes (see OverlayApp) instead of letting it stampede out at once.
     for (const alarm of this.core.store.data.alarms) {
       if (!alarm.enabled) continue
       for (const { time, key } of fireInstants(alarm, now)) {
         if (this.fired.has(key)) continue
         if (Math.abs(time.getTime() - now.getTime()) <= TICK_TOLERANCE_MS) {
-          this.fired.add(key)
+          this.fired.set(key, time.getTime())
           await fireAlarm(this.core, alarm, 'scheduler')
         }
       }
     }
     this.cleanupExpiredOnce(now)
-    // forget keys older than a day to bound memory
-    if (this.fired.size > 500) this.fired.clear()
+    // forget only instants whose ±tolerance window has fully closed, so an in-flight instant is
+    // never un-deduped (which would double-fire it); keeps the map bounded without a wholesale wipe
+    const cutoff = now.getTime() - TICK_TOLERANCE_MS * 2
+    for (const [k, t] of this.fired) if (t < cutoff) this.fired.delete(k)
   }
 
   /** One-shot ('once') alarms self-destruct ~a minute after their time, so they never linger. */

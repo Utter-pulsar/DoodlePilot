@@ -3,6 +3,7 @@ import { AnimatePresence, motion, Reorder, useDragControls } from 'framer-motion
 import type { Collection, FieldDef, FieldType, Id, RecordItem } from '@shared/types'
 import { useStore } from '../../store'
 import { api } from '../../lib/bridge'
+import { useDoodleScrollbar } from '../../lib/useDoodleScrollbar'
 import { recordFields } from '../../lib/fields'
 import { DoodleButton } from '../../components/doodle/DoodleButton'
 import { FieldEditor } from './FieldEditor'
@@ -91,6 +92,8 @@ function DrawerInner({
   // is what made the old version lag behind the drag. The aside's width is written straight to the
   // node, so the panel tracks the cursor 1:1 and the contents reflow via CSS, no React work.
   const asideRef = useRef<HTMLElement | null>(null)
+  const bodyRef = useRef<HTMLDivElement>(null)
+  useDoodleScrollbar(bodyRef, 'y')
   const initialWidth = useRef(readDrawerWidth()).current
   const widthRef = useRef(initialWidth)
   const target = useRef(initialWidth)
@@ -192,7 +195,7 @@ function DrawerInner({
           </button>
         </header>
 
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 font-doodle">
+        <div ref={bodyRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 font-doodle">
           {primary && (
             <DrawerFieldRow
               collection={collection}

@@ -6,7 +6,8 @@ import type {
   FieldDef,
   Id,
   RecordItem,
-  RecordWithLinks
+  RecordWithLinks,
+  ScreenshotTranslateConfig
 } from '../types'
 import type { BannerView, OverlayLayout } from '../types/overlay'
 
@@ -31,6 +32,19 @@ export type QueryMap = {
   'app.info': { input: void; result: { name: string; version: string; author: string } }
   'settings.get': { input: void; result: AppSettings }
   'window.isMaximized': { input: void; result: boolean }
+  // ---- screenshot translation ----
+  'screenshotTranslate.config': { input: void; result: ScreenshotTranslateConfig }
+  // a capture window asks for its own frozen screenshot frame + geometry (displayId from its ?d= query)
+  // a capture window opens instantly and asks for its context. `frame` is null while the screenshot
+  // is still in flight (it then arrives via the `capture.frame` event); if the screenshot already
+  // finished before the window registered its listener, it's returned here — pull + push, no race.
+  'capture.context': {
+    input: { displayId: number }
+    result: {
+      theme: 'paper' | 'dark'
+      frame: { frameDataUri: string; frameW: number; frameH: number; scaleFactor: number } | null
+    }
+  }
 }
 
 /** The self-update flow's progress, pushed main → renderer as `update.status`. The home screen
@@ -119,6 +133,34 @@ export type CommandMap = {
   // manual, fully-automatic: check → download → install → relaunch. Progress arrives via the
   // `update.status` event (shown under the home title). Packaged Win/Linux only.
   'update.check': { input: void; result: void }
+
+  // ---- screenshot translation ----
+  // deep-merge a patch into settings.screenshotTranslate (NOT settings.update — that's a shallow
+  // merge that would clobber the nested object). Re-registers the global shortcut as a side effect.
+  'screenshotTranslate.updateConfig': {
+    input: { patch: Partial<ScreenshotTranslateConfig> }
+    result: ScreenshotTranslateConfig
+  }
+  // send a tiny known test image to the configured model; pass ⇒ sets validated=true
+  'screenshotTranslate.testModel': { input: void; result: { ok: boolean; message: string } }
+  // fire a capture as if the global shortcut was pressed (also used by the shortcut handler)
+  'screenshotTranslate.trigger': { input: void; result: void }
+  // OCR plain text / extract LaTeX from the active capture's cropped image → clipboard
+  'screenshotTranslate.extract': {
+    input: { kind: 'text' | 'formula'; copy?: boolean }
+    result: { ok: boolean; text?: string; error?: string }
+  }
+  // a capture window reports the user's selection rect (frozen-frame px); main crops + translates,
+  // returning BOTH the translation markdown and the cropped source image (so "看原文" + "复制译文"
+  // are instant, no re-querying the model)
+  'capture.selectRegion': {
+    input: { displayId: number; rect: { x: number; y: number; w: number; h: number } }
+    result: { ok: boolean; markdown?: string; cropDataUri?: string; error?: string }
+  }
+  // copy arbitrary text to the clipboard from the capture window (used by 复制译文 — instant)
+  'screenshotTranslate.copy': { input: { text: string }; result: { ok: boolean } }
+  // ESC / dismiss — close every capture window, restore focus
+  'capture.cancel': { input: void; result: void }
 }
 
 export type EventMap = {
@@ -126,10 +168,18 @@ export type EventMap = {
   'records.changed': { collectionId: Id }
   'alarms.changed': Alarm[]
   'overlay.banner': BannerView
-  'alarm.ring': { alarmId: Id; label: string } // renderer plays a sound on this
   'toast': { kind: 'info' | 'success' | 'error'; message: string }
   'window.maximized': boolean // main → renderer: the main window's maximized state changed
   'update.status': UpdateStatus // self-update progress (checking / downloading / installing / …)
+  // pushed to each capture window once its display's frozen screenshot is ready (JPEG for fast
+  // transfer/decode). frameW/frameH = actual pixels; scaleFactor = the display's DPI scale.
+  'capture.frame': {
+    displayId: number
+    frameDataUri: string
+    frameW: number
+    frameH: number
+    scaleFactor: number
+  }
 }
 
 export type QueryName = keyof QueryMap

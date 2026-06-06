@@ -7,6 +7,7 @@ import { Store } from './services/store'
 import { createAppCore } from './services/context'
 import { registerCollectionService } from './services/collection-service'
 import { registerAlarmService } from './services/alarm-service'
+import { registerScreenshotTranslate } from './services/screenshot-translate'
 import { Scheduler } from './services/scheduler'
 import { registerUpdater } from './services/updater'
 import { WindowManager } from './windows/window-manager'
@@ -52,6 +53,7 @@ app.whenReady().then(async () => {
 
   registerIpc(core)
   registerIntegrations(core)
+  registerScreenshotTranslate(core, windows) // 截屏翻译 config + global hotkey + region capture
 
   scheduler = new Scheduler(core)
   scheduler.start()

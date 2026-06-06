@@ -10,6 +10,7 @@ import { DoodleTimePicker } from '../../components/doodle/DoodleTimePicker'
 import { DoodleWheel } from '../../components/doodle/DoodleWheel'
 import { DoodleNumber } from '../../components/doodle/DoodleNumber'
 import { useElasticDrag } from '../../lib/useElasticDrag'
+import { useDoodleScrollbar } from '../../lib/useDoodleScrollbar'
 import type { AlarmTrigger } from '@shared/types/alarm'
 import logoUrl from '@assets/logo.png'
 
@@ -339,6 +340,7 @@ export function AlarmPanel(): JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null)
   const innerRef = useRef<HTMLDivElement>(null)
   useElasticDrag(scrollRef, innerRef, 'y')
+  useDoodleScrollbar(scrollRef, 'y')
 
   // a collision ripple when the create form opens/closes or rows are added/removed. NOT on
   // edit open/close — that's a smooth in-place row↔form morph (below), so squashing the whole

@@ -3,6 +3,7 @@ import { Reorder, useDragControls } from 'framer-motion'
 import type { Id } from '@shared/types'
 import { useStore } from '../../store'
 import { api } from '../../lib/bridge'
+import { useDoodleScrollbar } from '../../lib/useDoodleScrollbar'
 import { DoodleButton } from '../../components/doodle/DoodleButton'
 import { RecordCard } from './RecordCard'
 
@@ -33,6 +34,8 @@ export function LaneColumn({
   const vel = useRef(0)
   const raf = useRef<number | undefined>(undefined)
   const dragging = useRef(false)
+  const listRef = useRef<HTMLDivElement>(null)
+  useDoodleScrollbar(listRef, 'y')
   const [order, setOrder] = useState<Id[]>([])
 
   useEffect(() => {
@@ -45,9 +48,12 @@ export function LaneColumn({
 
   useEffect(() => () => void (raf.current !== undefined && cancelAnimationFrame(raf.current)), [])
 
+  // history ("…-历史") lanes read newest-first: a card's `order` grows as it's archived, so the
+  // most recent one (highest order) sits on top. Normal lanes stay oldest-first (ascending).
+  const isArchive = collection?.kind === 'archive'
   const records = allRecords
     .filter((r) => r.collectionId === collectionId && !r.archived)
-    .sort((a, b) => a.order - b.order)
+    .sort((a, b) => (isArchive ? b.order - a.order : a.order - b.order))
   const recordIds = records.map((r) => r.id)
   const idsKey = recordIds.join(',')
 
@@ -63,7 +69,13 @@ export function LaneColumn({
 
   const onReorderRecords = (ids: Id[]): void => {
     setOrder(ids)
-    void api.command('records.reorder', { collectionId, orderedIds: ids })
+    // `records.reorder` writes order = array index (ascending). For a newest-first history lane the
+    // displayed top must get the HIGHEST order, so persist the reverse — the descending re-sort
+    // above then reproduces exactly what the user dragged.
+    void api.command('records.reorder', {
+      collectionId,
+      orderedIds: isArchive ? [...ids].reverse() : ids
+    })
   }
 
   const rename = async (): Promise<void> => {
@@ -156,7 +168,7 @@ export function LaneColumn({
         </button>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+      <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto pr-3">
         <Reorder.Group
           axis="y"
           values={visibleRecordIds}
@@ -177,11 +189,13 @@ export function LaneColumn({
         </DoodleButton>
       </div>
 
-      {/* width resize handle (right edge) — data-no-pan so it never triggers board pan */}
+      {/* width resize handle (right edge) — data-no-pan so it never triggers board pan. z-50 keeps
+          it ABOVE the overlaid scrollbar thumb (z-40), which clips ~3px into the handle when the
+          lane overflows, so a press at the very edge still resizes the column instead of scrolling. */}
       <div
         data-no-pan
         onPointerDown={startResize}
-        className="absolute -right-2 top-0 z-10 h-full w-3 cursor-col-resize"
+        className="absolute -right-2 top-0 z-50 h-full w-3 cursor-col-resize"
         title="拖动调整列宽"
       />
     </Reorder.Item>

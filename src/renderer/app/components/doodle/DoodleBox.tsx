@@ -14,6 +14,8 @@ interface DoodleBoxProps {
   fillStyle?: 'hachure' | 'cross-hatch' | 'solid'
   roughness?: number
   radius?: number
+  /** override the theme — for a window without the zustand store (the capture overlay) */
+  theme?: 'paper' | 'dark'
 }
 
 /**
@@ -29,14 +31,17 @@ export function DoodleBox({
   fill,
   fillStyle = 'hachure',
   roughness = 1.4,
-  radius = 12
+  radius = 12,
+  theme: themeProp
 }: DoodleBoxProps): JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
   const svgRef = useRef<SVGSVGElement>(null)
   const seedRef = useRef<number | undefined>(undefined)
   if (seedRef.current === undefined) seedRef.current = Math.floor(Math.random() * 2 ** 31)
-  // redraw when the theme flips so the hand-drawn border/fill pick up the new tokens
-  const theme = useStore((s) => s.theme)
+  // redraw when the theme flips so the hand-drawn border/fill pick up the new tokens. A caller in a
+  // window without the store (the capture overlay) passes `theme` explicitly instead.
+  const storeTheme = useStore((s) => s.theme)
+  const theme = themeProp ?? storeTheme
 
   useEffect(() => {
     const host = hostRef.current

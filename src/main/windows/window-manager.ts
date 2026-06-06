@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import { BrowserWindow, Menu, Tray, app, nativeImage, screen } from 'electron'
+import { BrowserWindow, Menu, Tray, app, nativeImage, screen, type Display } from 'electron'
 import { is } from '@electron-toolkit/utils'
 import type { EventMap } from '@shared/api/contract'
 import { IPC } from '@shared/api/channels'
@@ -7,12 +7,22 @@ import type { AppCore } from '../services/context'
 
 const PRELOAD = join(__dirname, '../preload/index.js')
 
-/** Resolve a renderer entry to a dev-server URL or a packaged file path. */
-function loadEntry(win: BrowserWindow, entry: 'app' | 'overlay'): void {
+/** Resolve a renderer entry to a dev-server URL or a packaged file path. A `displayId` (used by the
+ *  per-display capture windows) is passed through as a `?d=<id>` query so each window knows which
+ *  screen it covers (the generic IPC drops the event sender, so we can't derive it server-side). */
+function loadEntry(
+  win: BrowserWindow,
+  entry: 'app' | 'overlay' | 'capture',
+  displayId?: number
+): void {
+  const qs = displayId !== undefined ? `?d=${displayId}` : ''
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    void win.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/${entry}/index.html`)
+    void win.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/${entry}/index.html${qs}`)
   } else {
-    void win.loadFile(join(__dirname, `../renderer/${entry}/index.html`))
+    void win.loadFile(
+      join(__dirname, `../renderer/${entry}/index.html`),
+      displayId !== undefined ? { query: { d: String(displayId) } } : undefined
+    )
   }
 }
 
@@ -28,6 +38,12 @@ export class WindowManager {
   private main: BrowserWindow | null = null
   private overlay: BrowserWindow | null = null
   private tray: Tray | null = null
+  // one transparent, focusable window per display during a 截屏翻译 region capture (keyed by display id)
+  private captureWins = new Map<number, BrowserWindow>()
+  private focusBeforeCapture: BrowserWindow | null = null
+  /** fired when ALL capture windows vanish UNEXPECTEDLY (Alt+F4 / crash / load fail, not our own
+   *  close) — the screenshot service uses it to reset its capturing session so the hotkey recovers */
+  onCaptureGone: (() => void) | null = null
   private layout: DisplayLayout
   private readonly core: AppCore
   // flipped on ANY quit path (tray "退出", Cmd+Q, OS shutdown) so the main-window 'close'
@@ -90,6 +106,10 @@ export class WindowManager {
       if (patch.runInBackground !== undefined) this.syncTray()
       return { ...core.store.data.settings }
     })
+
+    // every time a banner launches, re-stake the overlay's place on top so the plane can't end up
+    // flying behind a window that grabbed topmost since (always-on-top can get bumped on Windows)
+    core.events.on('overlay.banner', () => this.assertOverlayTop())
   }
 
   /**
@@ -115,9 +135,10 @@ export class WindowManager {
     this.syncTray()
   }
 
-  /** Send a business event to every renderer window. */
+  /** Send a business event to every renderer window — including any live capture windows (they
+   *  receive their frozen frame via the `capture.frame` event). */
   broadcast<K extends keyof EventMap>(name: K, payload: EventMap[K]): void {
-    for (const win of [this.main, this.overlay]) {
+    for (const win of [this.main, this.overlay, ...this.captureWins.values()]) {
       if (win && !win.isDestroyed()) win.webContents.send(IPC.EVENT, { name, payload })
     }
   }
@@ -212,7 +233,9 @@ export class WindowManager {
         console.log(`[overlay] ${message} (${source}:${line})`)
       })
     }
-    this.overlay.setAlwaysOnTop(true, 'floating')
+    // 'screen-saver' is the highest always-on-top band: a reminder plane must fly OVER other apps.
+    // A plain 'floating' overlay was occasionally getting covered (e.g. by another topmost window).
+    this.overlay.setAlwaysOnTop(true, 'screen-saver')
     this.overlay.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
     // start fully click-through; forward:true still delivers mousemove for hit-testing
     this.overlay.setIgnoreMouseEvents(true, { forward: true })
@@ -220,6 +243,107 @@ export class WindowManager {
       this.overlay = null
     })
     loadEntry(this.overlay, 'overlay')
+  }
+
+  /** Re-assert the overlay as the topmost window. Always-on-top windows on Windows can get shoved
+   *  under a newly-created topmost window (another app, a fullscreen toggle) — exactly when a
+   *  banner would otherwise fly behind it — so we re-claim the top each time one launches. */
+  private assertOverlayTop(): void {
+    const o = this.overlay
+    if (!o || o.isDestroyed()) return
+    o.setAlwaysOnTop(true, 'screen-saver')
+    o.moveTop()
+  }
+
+  /**
+   * Open ONE transparent, focusable capture window per display (a single transparent window can't
+   * span monitors reliably on Windows — same reason the overlay is primary-only). Each window gets
+   * `?d=<id>` so it can pull its own frozen frame via `capture.context`. The user drags a selection
+   * over the frozen image; ESC / mouse-up route back through the service.
+   */
+  openCaptureWindows(displays: Display[]): void {
+    this.closeCaptureWindows()
+    this.focusBeforeCapture = BrowserWindow.getFocusedWindow()
+    for (const d of displays) {
+      const win = new BrowserWindow({
+        x: d.bounds.x,
+        y: d.bounds.y,
+        width: d.bounds.width,
+        height: d.bounds.height,
+        // NOT transparent: a transparent window can't render past the PRIMARY display's height on
+        // Windows, so a taller secondary monitor got clipped (only the top ~2/3 was usable). The
+        // frozen-frame image fills the whole window, so we don't need see-through; a dark backdrop
+        // just covers the brief load-in.
+        transparent: false,
+        backgroundColor: '#0a0a0a',
+        frame: false,
+        resizable: false,
+        movable: false,
+        minimizable: false,
+        maximizable: false,
+        skipTaskbar: true,
+        hasShadow: false,
+        fullscreenable: false,
+        alwaysOnTop: true,
+        focusable: true, // UNLIKE the overlay — the user interacts (drag-select, ESC)
+        // start FULLY TRANSPARENT (not show:false): the window is already shown, so revealing it is
+        // just setOpacity(1) — no Windows window-open zoom/fade animation. And at opacity 0 it's
+        // invisible to the desktop screenshot taken right now (DWM composites it as fully clear).
+        opacity: 0,
+        webPreferences: { preload: PRELOAD, sandbox: false }
+      })
+      win.setAlwaysOnTop(true, 'screen-saver')
+      win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+      win.setBounds({ x: d.bounds.x, y: d.bounds.y, width: d.bounds.width, height: d.bounds.height })
+      if (is.dev) {
+        win.webContents.on('console-message', (_e, _level, message) => console.log(`[capture] ${message}`))
+      }
+      win.on('closed', () => {
+        // Only an UNEXPECTED close fires onCaptureGone: deliberate closes (closeCaptureWindows /
+        // keepOnlyCaptureWindow) remove the window from the map BEFORE calling close(), so by the
+        // time their 'closed' fires it's no longer tracked here.
+        if (this.captureWins.get(d.id) === win) {
+          this.captureWins.delete(d.id)
+          if (this.captureWins.size === 0) this.onCaptureGone?.()
+        }
+      })
+      loadEntry(win, 'capture', d.id)
+      this.captureWins.set(d.id, win)
+    }
+  }
+
+  /** Close every capture window and hand focus back to whatever held it before the capture. */
+  closeCaptureWindows(): void {
+    const wins = [...this.captureWins.values()]
+    this.captureWins.clear() // remove first → the 'closed' handlers treat this as a deliberate close
+    for (const w of wins) if (!w.isDestroyed()) w.close()
+    const back = this.focusBeforeCapture
+    this.focusBeforeCapture = null
+    if (back && !back.isDestroyed()) back.focus()
+  }
+
+  /** Reveal the transparent capture windows once their frozen frames are ready (just fade opacity
+   *  to 1 — no window-open animation); focus the first so it receives the ESC keydown. */
+  showCaptureWindows(): void {
+    let first = true
+    for (const w of this.captureWins.values()) {
+      if (w.isDestroyed()) continue
+      w.setOpacity(1)
+      if (first) {
+        w.focus()
+        first = false
+      }
+    }
+  }
+
+  /** Close every capture window EXCEPT the one on `displayId` — it stays to show the result. */
+  keepOnlyCaptureWindow(displayId: number): void {
+    for (const [id, w] of [...this.captureWins]) {
+      if (id !== displayId) {
+        this.captureWins.delete(id) // remove first → deliberate close, won't trip onCaptureGone
+        if (!w.isDestroyed()) w.close()
+      }
+    }
   }
 
   getMain(): BrowserWindow | null {

@@ -46,7 +46,8 @@ export default defineConfig({
       rollupOptions: {
         input: {
           app: resolve('src/renderer/app/index.html'),
-          overlay: resolve('src/renderer/overlay/index.html')
+          overlay: resolve('src/renderer/overlay/index.html'),
+          capture: resolve('src/renderer/capture/index.html')
         }
       }
     }

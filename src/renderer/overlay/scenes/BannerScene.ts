@@ -11,6 +11,7 @@ const SPEED_PX_PER_S = 210
 
 interface Run {
   banner: Banner
+  group: Container
   rightEdge: () => number
 }
 
@@ -33,6 +34,16 @@ export class BannerScene extends Container {
   /** Ripple every active banner each frame. */
   update(dtMs: number): void {
     for (const r of this.active) r.banner.update(dtMs)
+  }
+
+  /**
+   * Drop every in-flight banner at once. Called when the overlay's rAF ticker resumes after a
+   * long pause (display asleep / system suspended): banners that piled up while no frames were
+   * drawn would otherwise ALL fly across together. Cancelling each fly-tween resolves its
+   * awaiting `show()`, whose own cleanup then destroys the group and frees the lane.
+   */
+  clearAll(): void {
+    for (const r of [...this.active]) tweens.cancel(r.group)
   }
 
   async show(text: string, brand = false): Promise<void> {
@@ -62,6 +73,7 @@ export class BannerScene extends Container {
 
     const run: Run = {
       banner,
+      group,
       rightEdge: () => group.x + banner.x + banner.bannerWidth / 2
     }
     this.lanes[lane] = run
