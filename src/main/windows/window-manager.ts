@@ -264,6 +264,7 @@ export class WindowManager {
   openCaptureWindows(displays: Display[]): void {
     this.closeCaptureWindows()
     this.focusBeforeCapture = BrowserWindow.getFocusedWindow()
+    const isMac = process.platform === 'darwin'
     for (const d of displays) {
       const win = new BrowserWindow({
         x: d.bounds.x,
@@ -283,7 +284,11 @@ export class WindowManager {
         maximizable: false,
         skipTaskbar: true,
         hasShadow: false,
-        fullscreenable: false,
+        // macOS only: required so setSimpleFullScreen() (entered at REVEAL, in showCaptureWindows)
+        // actually takes. macOS clamps a normal window into the workArea — below the menu bar —
+        // which shoved the frozen frame DOWN by the menu-bar height; simple-fullscreen lets the
+        // window own the WHOLE display so the frame lines up 1:1. Left false on Win/Linux.
+        fullscreenable: isMac,
         alwaysOnTop: true,
         focusable: true, // UNLIKE the overlay — the user interacts (drag-select, ESC)
         // start FULLY TRANSPARENT (not show:false): the window is already shown, so revealing it is
@@ -297,6 +302,15 @@ export class WindowManager {
       win.setBounds({ x: d.bounds.x, y: d.bounds.y, width: d.bounds.width, height: d.bounds.height })
       if (is.dev) {
         win.webContents.on('console-message', (_e, _level, message) => console.log(`[capture] ${message}`))
+      }
+      // macOS: exit simple-fullscreen BEFORE the window is destroyed, on EVERY close path — our own
+      // close(), Cmd+W, or an OS/crash close. 'close' fires while the window still exists (unlike
+      // 'closed'), so restoring NSApp presentation options here is what makes the real menu bar /
+      // Dock reappear; skip it and an abnormal close leaves them hidden until the app restarts.
+      if (isMac) {
+        win.on('close', () => {
+          if (!win.isDestroyed() && win.isSimpleFullScreen()) win.setSimpleFullScreen(false)
+        })
       }
       win.on('closed', () => {
         // Only an UNEXPECTED close fires onCaptureGone: deliberate closes (closeCaptureWindows /
@@ -316,18 +330,27 @@ export class WindowManager {
   closeCaptureWindows(): void {
     const wins = [...this.captureWins.values()]
     this.captureWins.clear() // remove first → the 'closed' handlers treat this as a deliberate close
+    // each window's macOS 'close' handler leaves simple-fullscreen first (restores the menu bar/Dock)
     for (const w of wins) if (!w.isDestroyed()) w.close()
     const back = this.focusBeforeCapture
     this.focusBeforeCapture = null
     if (back && !back.isDestroyed()) back.focus()
   }
 
-  /** Reveal the transparent capture windows once their frozen frames are ready (just fade opacity
-   *  to 1 — no window-open animation); focus the first so it receives the ESC keydown. */
+  /** Reveal the capture windows once their frozen frames are ready (fade opacity to 1 — no
+   *  window-open animation); focus the first so it receives the ESC keydown.
+   *
+   *  macOS: enter simple-fullscreen HERE, not at creation. The desktop screenshot is already taken
+   *  by this point, so the menu-bar/Dock hide that simple-fullscreen triggers can never be captured
+   *  into the frozen frame. It makes the window cover the ENTIRE display (incl. the menu bar, and any
+   *  native-fullscreen app underneath), so the frame sits top-left 1:1 — no downward menu-bar offset
+   *  on a normal desktop, and no cropped content when the captured app was itself fullscreen. */
   showCaptureWindows(): void {
+    const isMac = process.platform === 'darwin'
     let first = true
     for (const w of this.captureWins.values()) {
       if (w.isDestroyed()) continue
+      if (isMac) w.setSimpleFullScreen(true)
       w.setOpacity(1)
       if (first) {
         w.focus()
@@ -341,7 +364,7 @@ export class WindowManager {
     for (const [id, w] of [...this.captureWins]) {
       if (id !== displayId) {
         this.captureWins.delete(id) // remove first → deliberate close, won't trip onCaptureGone
-        if (!w.isDestroyed()) w.close()
+        if (!w.isDestroyed()) w.close() // macOS 'close' handler leaves simple-fullscreen first
       }
     }
   }

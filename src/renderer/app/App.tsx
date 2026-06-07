@@ -89,7 +89,12 @@ export default function App(): JSX.Element {
           <AnimatePresence initial={false} mode="sync">
             <motion.div
               key={tab}
-              className="absolute inset-0"
+              // `isolate` gives this tab its own stacking context so the board's hand-drawn
+              // scrollbars (.doodle-scrollthumb, z-40) and lane resize handles (z-50) stay
+              // CONTAINED here. Otherwise — once framer-motion clears the slide transform at rest —
+              // those children escape into <main> and their high z-index paints OVER the RecordDrawer
+              // (z-20), which is a sibling of this container (the scrollbar-over-edit-panel bug).
+              className="absolute inset-0 isolate"
               initial={{ opacity: 0, x: 30 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: -30 }}
