@@ -32,12 +32,26 @@ export function CaptureApp(): JSX.Element {
   const [frameSize, setFrameSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 })
   const [scaleFactor, setScaleFactor] = useState(1)
   const [theme, setTheme] = useState<'paper' | 'dark'>('paper')
+  const [mode, setMode] = useState<'translate' | 'analyze'>('translate')
+  const [thinkingEnabled, setThinkingEnabled] = useState(false) // analyze job asked for 思考
   const [phase, setPhase] = useState<Phase>('select')
   const [result, setResult] = useState('')
   const [cropUri, setCropUri] = useState('')
   const [errMsg, setErrMsg] = useState('')
+  const [streaming, setStreaming] = useState(false)
+  const [reasoning, setReasoning] = useState('') // 截屏分析 thinking (when the function enabled it)
+  const [copied, setCopied] = useState(false) // result auto-copied to the clipboard on finish
   const startRef = useRef<{ x: number; y: number } | null>(null)
   const [rect, setRect] = useState<Rect | null>(null)
+  // streamed tokens land here and are flushed to state at most once per frame, so a fast token stream
+  // can't thrash React + KaTeX (which re-renders the whole markdown each update)
+  const pendingRef = useRef<string | null>(null)
+  const pendingReasonRef = useRef<string | null>(null)
+  const rafRef = useRef<number | undefined>(undefined)
+  // the current translation has reached 'done' or 'error' — guards against a late 'delta' overwriting
+  // the final text, and tells onUp's awaited fallback that the events already settled the view. A ref
+  // (not the `streaming` state) because the event listener closes over its mount-time value.
+  const finishedRef = useRef(false)
 
   useEffect(() => {
     const applyFrame = (f: {
@@ -57,6 +71,8 @@ export function CaptureApp(): JSX.Element {
     void api.query('capture.context', { displayId }).then((ctx) => {
       document.documentElement.classList.toggle('dark', ctx.theme === 'dark')
       setTheme(ctx.theme)
+      setMode(ctx.mode)
+      setThinkingEnabled(ctx.thinking)
       if (ctx.frame) applyFrame(ctx.frame)
     })
     return off
@@ -71,6 +87,64 @@ export function CaptureApp(): JSX.Element {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
+
+  // streaming result (翻译 OR 分析): flip to the result view on 'start' (with the original in hand for
+  // 看原文), live-render the markdown-so-far on each coalesced 'delta'; 'done'/'error' settle the view.
+  useEffect(() => {
+    const flush = (): void => {
+      rafRef.current = undefined
+      if (pendingRef.current !== null) {
+        setResult(pendingRef.current)
+        pendingRef.current = null
+      }
+      if (pendingReasonRef.current !== null) {
+        setReasoning(pendingReasonRef.current)
+        pendingReasonRef.current = null
+      }
+    }
+    const off = api.on('capture.result', (m) => {
+      if (m.displayId !== displayId) return
+      if (m.phase === 'start') {
+        finishedRef.current = false
+        setCropUri(m.cropDataUri || '')
+        setResult('')
+        setReasoning('')
+        setCopied(false)
+        setErrMsg('')
+        pendingRef.current = null
+        pendingReasonRef.current = null
+        setStreaming(true)
+        setPhase('result')
+      } else if (m.phase === 'delta') {
+        if (finishedRef.current) return // ignore a stray late delta after done/error
+        pendingRef.current = m.text ?? ''
+        pendingReasonRef.current = m.reasoning ?? ''
+        if (rafRef.current === undefined) rafRef.current = requestAnimationFrame(flush)
+      } else if (m.phase === 'done') {
+        finishedRef.current = true
+        if (rafRef.current !== undefined) cancelAnimationFrame(rafRef.current)
+        rafRef.current = undefined
+        pendingRef.current = null
+        pendingReasonRef.current = null
+        setResult(m.text ?? '')
+        setReasoning(m.reasoning ?? '')
+        setCopied(!!m.copied)
+        // non-streaming has no 'start' event, so the original image arrives here instead
+        if (m.cropDataUri) setCropUri(m.cropDataUri)
+        setStreaming(false)
+        setPhase('result')
+      } else if (m.phase === 'error') {
+        finishedRef.current = true
+        setErrMsg(m.error || '翻译失败，请重试')
+        setStreaming(false)
+        setPhase('error')
+      }
+    })
+    return () => {
+      off()
+      if (rafRef.current !== undefined) cancelAnimationFrame(rafRef.current)
+    }
+  }, [displayId])
 
   // 1:1 layout: physical px per CSS px (== the display's scaleFactor, derived from frame width ÷
   // window width so we never hard-code a resolution). The frozen frame fills the window width and
@@ -118,14 +192,14 @@ export function CaptureApp(): JSX.Element {
       cancel() // a click / tiny drag = cancel
       return
     }
+    finishedRef.current = false // new session — clear any prior 'done'/'error'
     setPhase('loading')
+    // the view is driven by the `capture.result` events above; this awaited result is only a
+    // safety net for a failure that somehow never arrived as an 'error' event (events already
+    // settled → finishedRef is set → don't clobber what they showed).
     const res = await api.command('capture.selectRegion', { displayId, rect: toFramePixels(r) })
-    if (res.ok && res.markdown !== undefined) {
-      setResult(res.markdown)
-      setCropUri(res.cropDataUri || '')
-      setPhase('result')
-    } else {
-      setErrMsg(res.error || '翻译失败，请重试')
+    if (!res.ok && !finishedRef.current) {
+      setErrMsg(res.error || (mode === 'analyze' ? '分析失败，请重试' : '翻译失败，请重试'))
       setPhase('error')
     }
   }
@@ -194,13 +268,24 @@ export function CaptureApp(): JSX.Element {
           style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }}
         >
           <div className="animate-pulse rounded-[10px] border-2 border-ink bg-card px-4 py-2 text-ink">
-            翻译中…
+            {mode === 'analyze' ? '分析中…' : '翻译中…'}
           </div>
         </div>
       )}
 
       {phase === 'result' && rect && (
-        <ResultCard rect={rect} markdown={result} cropDataUri={cropUri} theme={theme} onClose={cancel} />
+        <ResultCard
+          rect={rect}
+          markdown={result}
+          reasoning={reasoning}
+          thinkingEnabled={thinkingEnabled}
+          cropDataUri={cropUri}
+          theme={theme}
+          streaming={streaming}
+          mode={mode}
+          copied={copied}
+          onClose={cancel}
+        />
       )}
 
       {phase === 'error' && rect && (

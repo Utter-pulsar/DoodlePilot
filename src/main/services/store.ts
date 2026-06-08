@@ -35,7 +35,29 @@ CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
  */
 type Migration = (db: Database) => void
 const migrations: Record<number, Migration> = {
-  // 3: (db) => { for (const c of db.collections) for (const f of c.fields) f.width ??= 200 },
+  // 3: the multimodal-model config moved from screenshotTranslate into a SHARED settings.visionModel
+  // (so 截屏翻译 + 截屏分析 reuse one verified model). Carry the user's existing model + 已验证 over,
+  // then drop the moved keys from screenshotTranslate. seed.ts ships new installs at v3 directly.
+  3: (db) => {
+    const st = db.settings.screenshotTranslate as Partial<{
+      baseUrl: string
+      apiKey: string
+      model: string
+      validated: boolean
+    }>
+    if (st && (st.baseUrl || st.apiKey || st.model)) {
+      db.settings.visionModel = {
+        baseUrl: st.baseUrl || db.settings.visionModel?.baseUrl || 'https://api.openai.com/v1',
+        apiKey: st.apiKey ?? '',
+        model: st.model ?? '',
+        validated: !!st.validated
+      }
+    }
+    delete st.baseUrl
+    delete st.apiKey
+    delete st.model
+    delete st.validated
+  }
 }
 
 /** Walk `db.version` up to SEED_VERSION, applying each migration in turn. Returns true if moved. */

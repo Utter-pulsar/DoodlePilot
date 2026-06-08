@@ -1,11 +1,15 @@
 import { useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { api } from '../lib/bridge'
+import { useStore } from '../store'
 import { DoodleBox } from './doodle/DoodleBox'
 import { ModalScrim } from './ModalScrim'
 import { SettingsDialog } from './SettingsDialog'
 import { ScreenshotTranslateDialog } from './ScreenshotTranslateDialog'
+import { ScreenshotAnalyzeDialog } from './ScreenshotAnalyzeDialog'
 import logoUrl from '@assets/logo.png'
+
+type MenuDialog = 'settings' | 'translate' | 'analyze' | 'about' | null
 
 const TITLEBAR_H = 44 // height of the draggable title-bar strip
 
@@ -21,14 +25,36 @@ export function TitleBar(): JSX.Element {
   // RIGHT on Win/Linux (so ☰ goes left), and on the LEFT on macOS (so ☰ goes right).
   const isMac = window.platform === 'darwin'
   const [menuOpen, setMenuOpen] = useState(false)
-  const [aboutOpen, setAboutOpen] = useState(false)
-  const [settingsOpen, setSettingsOpen] = useState(false)
-  const [screenshotOpen, setScreenshotOpen] = useState(false)
+  // exactly one menu dialog is open at a time → a single state (switching is trivial, no cross-resets)
+  const [dialog, setDialog] = useState<MenuDialog>(null)
   const [info, setInfo] = useState<{ name: string; version: string; author: string } | null>(null)
+  const updateStatus = useStore((s) => s.updateStatus)
+  const checkForUpdate = useStore((s) => s.checkForUpdate)
 
   useEffect(() => {
     void api.query('app.info', undefined).then(setInfo)
   }, [])
+
+  // 检查更新 lives in the 版本 card (updating is a version concern). The button label shows live
+  // progress; the line above it is the static description, swapped for the terminal result.
+  const updateBusy =
+    updateStatus.phase === 'checking' ||
+    updateStatus.phase === 'downloading' ||
+    updateStatus.phase === 'installing'
+  const updateLabel =
+    updateStatus.phase === 'checking'
+      ? '检查中…'
+      : updateStatus.phase === 'downloading'
+        ? `下载中 ${updateStatus.percent}%`
+        : updateStatus.phase === 'installing'
+          ? '即将重启安装…'
+          : '检查更新'
+  const updateHint =
+    updateStatus.phase === 'none'
+      ? '已是最新版本 ✓'
+      : updateStatus.phase === 'error'
+        ? `更新失败：${updateStatus.message}`
+        : '自动检查更新的话，会自动检查、下载、安装并重启'
 
   return (
     <>
@@ -78,39 +104,25 @@ export function TitleBar(): JSX.Element {
               transition={{ type: 'spring', stiffness: 460, damping: 24 }}
             >
               <div className="min-w-[150px] rounded-[10px] border-2 border-ink bg-card p-1 shadow-md">
-                <button
-                  onClick={() => {
-                    setMenuOpen(false)
-                    setAboutOpen(false) // switch directly if another dialog is already open
-                    setScreenshotOpen(false)
-                    setSettingsOpen(true)
-                  }}
-                  className="flex w-full items-center gap-2 rounded-[6px] px-3 py-1.5 text-left text-base hover:bg-marker-yellow/40"
-                >
-                  ⚙️ 设置
-                </button>
-                <button
-                  onClick={() => {
-                    setMenuOpen(false)
-                    setSettingsOpen(false)
-                    setAboutOpen(false)
-                    setScreenshotOpen(true)
-                  }}
-                  className="flex w-full items-center gap-2 rounded-[6px] px-3 py-1.5 text-left text-base hover:bg-marker-yellow/40"
-                >
-                  🌐 截屏翻译
-                </button>
-                <button
-                  onClick={() => {
-                    setMenuOpen(false)
-                    setSettingsOpen(false) // switch directly if another dialog is already open
-                    setScreenshotOpen(false)
-                    setAboutOpen(true)
-                  }}
-                  className="flex w-full items-center gap-2 rounded-[6px] px-3 py-1.5 text-left text-base hover:bg-marker-yellow/40"
-                >
-                  🏷️ 版本
-                </button>
+                {(
+                  [
+                    { id: 'settings', label: '⚙️ 设置' },
+                    { id: 'translate', label: '🌐 截屏翻译' },
+                    { id: 'analyze', label: '🔍 截屏分析' },
+                    { id: 'about', label: '🏷️ 版本' }
+                  ] as const
+                ).map((item) => (
+                  <button
+                    key={item.id}
+                    onClick={() => {
+                      setMenuOpen(false)
+                      setDialog(item.id) // switches directly even if another dialog is already open
+                    }}
+                    className="flex w-full items-center gap-2 rounded-[6px] px-3 py-1.5 text-left text-base hover:bg-marker-yellow/40"
+                  >
+                    {item.label}
+                  </button>
+                ))}
               </div>
             </motion.div>
           </>
@@ -119,14 +131,14 @@ export function TitleBar(): JSX.Element {
 
       {/* Q-bouncy version / about card */}
       <AnimatePresence>
-        {aboutOpen && (
+        {dialog === 'about' && (
           <motion.div
             className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
           >
-            <ModalScrim onDismiss={() => setAboutOpen(false)} />
+            <ModalScrim onDismiss={() => setDialog(null)} />
             <motion.div
               className="pointer-events-auto relative"
               initial={{ scale: 0.8, opacity: 0, y: 12 }}
@@ -140,12 +152,24 @@ export function TitleBar(): JSX.Element {
                   <div className="text-2xl font-bold">{info?.name ?? 'DoodlePilot'}</div>
                   <div className="text-base opacity-70">版本 {info?.version ?? '…'}</div>
                   <div className="text-sm opacity-50">作者 {info?.author ?? 'Utter_pulsar'}</div>
-                  <button
-                    onClick={() => setAboutOpen(false)}
-                    className="mt-2 rounded-[8px] border-2 border-ink px-5 py-1 text-base hover:bg-marker-yellow/40"
-                  >
-                    好的
-                  </button>
+                  {/* centered description (or the latest update status) */}
+                  <p className="px-1 text-xs leading-relaxed opacity-50">{updateHint}</p>
+                  {/* 检查更新 bottom-left, 好的 bottom-right, equal width for symmetry */}
+                  <div className="mt-3 flex w-full gap-3">
+                    <button
+                      onClick={checkForUpdate}
+                      disabled={updateBusy}
+                      className="flex-1 rounded-[8px] border-2 border-ink px-3 py-1 text-base hover:bg-marker-yellow/40 disabled:opacity-50"
+                    >
+                      {updateLabel}
+                    </button>
+                    <button
+                      onClick={() => setDialog(null)}
+                      className="flex-1 rounded-[8px] border-2 border-ink px-3 py-1 text-base hover:bg-marker-yellow/40"
+                    >
+                      好的
+                    </button>
+                  </div>
                 </div>
               </DoodleBox>
             </motion.div>
@@ -153,8 +177,9 @@ export function TitleBar(): JSX.Element {
         )}
       </AnimatePresence>
 
-      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
-      <ScreenshotTranslateDialog open={screenshotOpen} onClose={() => setScreenshotOpen(false)} />
+      <SettingsDialog open={dialog === 'settings'} onClose={() => setDialog(null)} />
+      <ScreenshotTranslateDialog open={dialog === 'translate'} onClose={() => setDialog(null)} />
+      <ScreenshotAnalyzeDialog open={dialog === 'analyze'} onClose={() => setDialog(null)} />
     </>
   )
 }

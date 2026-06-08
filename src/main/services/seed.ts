@@ -12,7 +12,7 @@ import type { Database } from './store'
 // The current schema version. seedDatabase() stamps it on brand-new installs; store.ts walks an
 // OLDER DB up to it via in-place `migrations` (it never wipes). When you change the data
 // structure, bump this AND add the matching migration step in store.ts.
-export const SEED_VERSION = 2
+export const SEED_VERSION = 3
 
 function status(label: string, color: string): SelectOption {
   return { id: newId('opt'), label, color }

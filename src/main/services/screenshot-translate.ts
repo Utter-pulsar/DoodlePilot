@@ -1,10 +1,19 @@
 import { app, clipboard, desktopCapturer, globalShortcut, nativeImage, screen } from 'electron'
 import type { Display, NativeImage } from 'electron'
-import { DEFAULT_SCREENSHOT_TRANSLATE } from '@shared/types'
-import type { ScreenshotTranslateConfig } from '@shared/types'
+import {
+  DEFAULT_SCREENSHOT_ANALYZE,
+  DEFAULT_SCREENSHOT_TRANSLATE,
+  DEFAULT_VISION_MODEL
+} from '@shared/types'
+import type {
+  AnalysisFunction,
+  ScreenshotAnalyzeConfig,
+  ScreenshotTranslateConfig,
+  VisionModelConfig
+} from '@shared/types'
 import type { AppCore } from './context'
 import type { WindowManager } from '../windows/window-manager'
-import { chatVision, VisionError } from './vision-client'
+import { chatVision, chatVisionOnce, chatVisionStream, VisionError } from './vision-client'
 
 interface CaptureEntry {
   display: Display
@@ -21,15 +30,35 @@ const TRANSLATE_SYSTEM =
   'code). Do not add explanations, notes, or the original text. If the image contains no readable ' +
   'text, output exactly: [无文字]'
 
+// Screenshot ANALYSIS: the user's per-function prompt becomes the user message; this fixes the
+// OUTPUT FORMAT so math always renders (KaTeX) and copy keeps raw LaTeX.
+const ANALYZE_SYSTEM =
+  'You are a precise multimodal assistant. Carefully read the image, then complete the user\'s ' +
+  'request about it. Output ONLY the result as GitHub-Flavored Markdown, preserving structure ' +
+  '(headings, lists, tables, code blocks). For ANY mathematics, use LaTeX: $…$ for inline and ' +
+  '$$…$$ for display. Do not add commentary beyond what the user asked for.'
+
+// Cap the longest side of the crop sent to the model. A full-width selection on a HiDPI display can
+// be 3000+ px, whose image-token prefill is the bulk of the "blank, waiting for the first token"
+// delay; downscaling to ~2000 cuts upload/encode (and often prefill) with no real OCR/translation
+// quality loss, and 看原文 at 2000px is still sharp.
+const MAX_CROP_SIDE = 2000
+
 /** Crop the user's selection (already in FROZEN-FRAME PIXELS — the renderer maps from window CSS)
- *  out of the frame → PNG data URI. */
+ *  out of the frame, downscaled if huge → PNG data URI. */
 function cropToDataUri(image: NativeImage, rect: { x: number; y: number; w: number; h: number }): string {
   const sz = image.getSize()
   const x = Math.max(0, Math.min(Math.round(rect.x), sz.width - 1))
   const y = Math.max(0, Math.min(Math.round(rect.y), sz.height - 1))
   const w = Math.max(1, Math.min(Math.round(rect.w), sz.width - x))
   const h = Math.max(1, Math.min(Math.round(rect.h), sz.height - y))
-  return `data:image/png;base64,${image.crop({ x, y, width: w, height: h }).toPNG().toString('base64')}`
+  let crop = image.crop({ x, y, width: w, height: h })
+  const longest = Math.max(w, h)
+  if (longest > MAX_CROP_SIDE) {
+    const scale = MAX_CROP_SIDE / longest
+    crop = crop.resize({ width: Math.round(w * scale), height: Math.round(h * scale), quality: 'better' })
+  }
+  return `data:image/png;base64,${crop.toPNG().toString('base64')}`
 }
 
 /** A small solid-red PNG built without touching disk — the capability test asks the model to name
@@ -86,21 +115,34 @@ async function captureAllDisplays(): Promise<Map<number, CaptureEntry>> {
   return map
 }
 
+/** What the current capture should DO once a region is chosen (set when a shortcut/trigger fires). */
+type CaptureJob = { kind: 'translate' } | { kind: 'analyze'; fn: AnalysisFunction }
+
 /**
- * 截屏翻译 feature service: persists the model/shortcut config, owns the global hotkey, and drives
- * the multi-display freeze-frame region capture + vision translation. 提取文本/公式 (Stage 4)
- * re-uses the cropped image cached here. Follows the registerXxx(core) pattern.
+ * Capture feature service: owns the shared multimodal model config (set in 设置), the 截屏翻译 +
+ * 截屏分析 feature configs, the global hotkeys, and the multi-display freeze-frame region capture →
+ * vision call. Both features reuse the SAME validated model and the SAME capture flow; only the
+ * prompt + result-view differ. Follows the registerXxx(core) pattern.
  */
 export function registerScreenshotTranslate(core: AppCore, windows: WindowManager): void {
-  const readConfig = (): ScreenshotTranslateConfig => ({
+  const readModel = (): VisionModelConfig => ({
+    ...DEFAULT_VISION_MODEL,
+    ...core.store.data.settings.visionModel
+  })
+  const readTranslate = (): ScreenshotTranslateConfig => ({
     ...DEFAULT_SCREENSHOT_TRANSLATE,
     ...core.store.data.settings.screenshotTranslate
+  })
+  const readAnalyze = (): ScreenshotAnalyzeConfig => ({
+    ...DEFAULT_SCREENSHOT_ANALYZE,
+    ...core.store.data.settings.screenshotAnalyze
   })
 
   // ---- capture session state ----
   let capturing = false
   const frames = new Map<number, CaptureEntry>()
-  let lastCropDataUri: string | null = null // the chosen crop, re-used by 提取文本/公式 (Stage 4)
+  let lastCropDataUri: string | null = null // the chosen crop, re-used by 提取文本/公式
+  let pendingJob: CaptureJob = { kind: 'translate' } // what capture.selectRegion should run
 
   const endCapture = (): void => {
     windows.closeCaptureWindows()
@@ -109,47 +151,38 @@ export function registerScreenshotTranslate(core: AppCore, windows: WindowManage
     capturing = false
   }
 
-  // ---- global hotkey ----
-  const syncShortcut = (): void => {
+  // ---- global hotkeys (ALL gated on a VALIDATED shared model — no model, nothing fires) ----
+  const syncShortcuts = (): void => {
     globalShortcut.unregisterAll()
-    const c = readConfig()
-    if (!c.enabled || !c.shortcut) return
-    let ok = false
-    try {
-      ok = globalShortcut.register(c.shortcut, () => {
-        void core.commands.execute('screenshotTranslate.trigger', undefined)
-      })
-    } catch {
-      ok = false
+    if (!readModel().validated) return
+    const conflicts: string[] = []
+    const reg = (accel: string, run: () => void): void => {
+      if (!accel) return
+      let ok = false
+      try {
+        ok = globalShortcut.register(accel, run)
+      } catch {
+        ok = false
+      }
+      if (!ok) conflicts.push(accel)
     }
-    if (!ok) core.broadcast('toast', { kind: 'error', message: `快捷键 ${c.shortcut} 被占用，请换一个` })
+    const t = readTranslate()
+    if (t.enabled) reg(t.shortcut, () => void core.commands.execute('screenshotTranslate.trigger', undefined))
+    const a = readAnalyze()
+    if (a.enabled) {
+      for (const fn of a.functions) {
+        reg(fn.shortcut, () => void core.commands.execute('screenshotAnalyze.trigger', { functionId: fn.id }))
+      }
+    }
+    if (conflicts.length) {
+      core.broadcast('toast', { kind: 'error', message: `快捷键被占用：${conflicts.join('、')}，请换一个` })
+    }
   }
 
-  // ---- config ----
-  core.queries.register('screenshotTranslate.config', () => readConfig())
-
-  core.commands.register('screenshotTranslate.updateConfig', ({ patch }) => {
-    core.store.mutate((db) => {
-      const prev = { ...DEFAULT_SCREENSHOT_TRANSLATE, ...db.settings.screenshotTranslate }
-      const next: ScreenshotTranslateConfig = { ...prev, ...patch }
-      // changing the model identity invalidates a prior capability check — but ONLY when the value
-      // actually changed, so a no-op blur (focus-out with the same text) doesn't silently un-validate
-      const modelChanged =
-        (patch.baseUrl !== undefined && patch.baseUrl !== prev.baseUrl) ||
-        (patch.model !== undefined && patch.model !== prev.model) ||
-        (patch.apiKey !== undefined && patch.apiKey !== prev.apiKey)
-      if (modelChanged && !('validated' in patch)) next.validated = false
-      db.settings.screenshotTranslate = next
-    })
-    syncShortcut()
-    return readConfig()
-  })
-
-  // ---- capture flow ----
-  core.commands.register('screenshotTranslate.trigger', async () => {
-    const c = readConfig()
-    if (!c.enabled || !c.validated) return // gated: enabled AND a passed capability test
-    if (capturing) return // re-entrancy guard (R12)
+  // shared: open the capture windows, screenshot every display, reveal. The caller sets `pendingJob`
+  // (and gates on validated/enabled) BEFORE calling this.
+  const beginCapture = async (): Promise<void> => {
+    if (capturing) return // re-entrancy guard
     capturing = true
     frames.clear()
     // Open the windows HIDDEN: they load (React, fonts) in PARALLEL while we screenshot the DESKTOP.
@@ -162,7 +195,6 @@ export function registerScreenshotTranslate(core: AppCore, windows: WindowManage
         endCapture()
         return
       }
-      console.log(`[screenshot] captured ${map.size} display(s)`)
       for (const [id, e] of map) {
         frames.set(id, e)
         const sz = e.image.getSize()
@@ -179,20 +211,128 @@ export function registerScreenshotTranslate(core: AppCore, windows: WindowManage
       console.error('[screenshot] capture failed', e)
       endCapture()
     }
+  }
+
+  // ---- shared multimodal model config (lives in 设置) ----
+  core.queries.register('visionModel.config', () => readModel())
+
+  core.commands.register('visionModel.updateConfig', ({ patch }) => {
+    core.store.mutate((db) => {
+      const prev = { ...DEFAULT_VISION_MODEL, ...db.settings.visionModel }
+      const next: VisionModelConfig = { ...prev, ...patch }
+      // changing the model identity invalidates a prior capability check — but ONLY when the value
+      // actually changed, so a no-op blur (focus-out with the same text) doesn't silently un-validate
+      const modelChanged =
+        (patch.baseUrl !== undefined && patch.baseUrl !== prev.baseUrl) ||
+        (patch.model !== undefined && patch.model !== prev.model) ||
+        (patch.apiKey !== undefined && patch.apiKey !== prev.apiKey)
+      if (modelChanged && !('validated' in patch)) next.validated = false
+      db.settings.visionModel = next
+    })
+    syncShortcuts() // validated may have flipped → re-gate every feature's shortcut
+    return readModel()
+  })
+
+  const setValidated = (v: boolean): void => {
+    core.store.mutate((db) => {
+      db.settings.visionModel = { ...DEFAULT_VISION_MODEL, ...db.settings.visionModel, validated: v }
+    })
+  }
+
+  core.commands.register('visionModel.testModel', async () => {
+    const m = readModel()
+    if (!m.baseUrl || !m.model) return { ok: false, message: '请先填写 API 地址与模型名称' }
+    try {
+      const reply = await chatVision({
+        baseUrl: m.baseUrl,
+        apiKey: m.apiKey,
+        model: m.model,
+        dataUri: makeTestImage(),
+        system: 'You are a vision capability test. Look at the image and answer in ONE short word.',
+        user: 'What color is this image? Answer in one word.',
+        maxTokens: 256 // not 20: reasoning models can burn a tiny budget before any visible token
+      })
+      // any sensible, non-refusal reply means the model actually accepted the image
+      const refused = /cannot|can.?t|unable|no image|don.?t see|无法|不能|看不到|没有图/i.test(reply)
+      const ok = reply.trim().length > 0 && !refused
+      setValidated(ok)
+      syncShortcuts() // validating unlocks the feature shortcuts
+      return ok
+        ? { ok: true, message: '模型支持图片输入 ✓' }
+        : { ok: false, message: '该模型似乎不支持图片输入，请更换模型' }
+    } catch (err) {
+      setValidated(false)
+      syncShortcuts()
+      return { ok: false, message: err instanceof VisionError ? err.message : '测试失败，请重试' }
+    }
+  })
+
+  // ---- 截屏翻译 config ----
+  core.queries.register('screenshotTranslate.config', () => readTranslate())
+
+  core.commands.register('screenshotTranslate.updateConfig', ({ patch }) => {
+    core.store.mutate((db) => {
+      db.settings.screenshotTranslate = {
+        ...DEFAULT_SCREENSHOT_TRANSLATE,
+        ...db.settings.screenshotTranslate,
+        ...patch
+      }
+    })
+    syncShortcuts()
+    return readTranslate()
+  })
+
+  // ---- 截屏分析 config ----
+  core.queries.register('screenshotAnalyze.config', () => readAnalyze())
+
+  core.commands.register('screenshotAnalyze.updateConfig', ({ patch }) => {
+    core.store.mutate((db) => {
+      db.settings.screenshotAnalyze = {
+        ...DEFAULT_SCREENSHOT_ANALYZE,
+        ...db.settings.screenshotAnalyze,
+        ...patch
+      }
+    })
+    syncShortcuts()
+    return readAnalyze()
+  })
+
+  // ---- triggers (gated: validated model AND the feature enabled) ----
+  core.commands.register('screenshotTranslate.trigger', async () => {
+    if (capturing) return
+    if (!readModel().validated || !readTranslate().enabled) return
+    pendingJob = { kind: 'translate' }
+    await beginCapture()
+  })
+
+  core.commands.register('screenshotAnalyze.trigger', async ({ functionId }) => {
+    if (capturing) return
+    if (!readModel().validated || !readAnalyze().enabled) return
+    const fn = readAnalyze().functions.find((f) => f.id === functionId)
+    if (!fn) return
+    pendingJob = { kind: 'analyze', fn }
+    await beginCapture()
   })
 
   core.queries.register('capture.context', ({ displayId }) => {
     const theme = core.store.data.settings.theme
+    const mode = pendingJob.kind === 'analyze' ? 'analyze' : 'translate'
+    const thinking = pendingJob.kind === 'analyze' && !!pendingJob.fn.thinking
     const e = frames.get(displayId)
-    if (!e) return { theme, frame: null } // screenshot still in flight → arrives via capture.frame
+    if (!e) return { theme, mode, thinking, frame: null } // screenshot in flight → arrives via capture.frame
     const sz = e.image.getSize()
     return {
       theme,
+      mode,
+      thinking,
       frame: { frameDataUri: e.jpegDataUri, frameW: sz.width, frameH: sz.height, scaleFactor: e.display.scaleFactor }
     }
   })
 
-  // crop → translate. Keep the chosen display's window open (it shows the result); close the others.
+  // crop → run the pending job (translate OR analyze). Keep the chosen display's window open (it shows
+  // the result); close the others. Streaming per the feature's `stream` flag — the window flips to its
+  // result view on 'start' (carrying the original for 看原文) and re-renders on each 'delta'; a
+  // non-streaming run stays in the loading state and shows the whole result on 'done'.
   core.commands.register('capture.selectRegion', async ({ displayId, rect }) => {
     const e = frames.get(displayId)
     if (!e) {
@@ -202,23 +342,59 @@ export function registerScreenshotTranslate(core: AppCore, windows: WindowManage
     const dataUri = cropToDataUri(e.image, rect)
     lastCropDataUri = dataUri
     windows.keepOnlyCaptureWindow(displayId)
-    const c = readConfig()
-    try {
-      const markdown = await chatVision({
-        baseUrl: c.baseUrl,
-        apiKey: c.apiKey,
-        model: c.model,
-        dataUri,
-        system: TRANSLATE_SYSTEM,
-        user: '翻译图片里的文字。'
+    const m = readModel()
+    const job = pendingJob
+    const analyze = job.kind === 'analyze'
+    const wantThinking = analyze && !!job.fn.thinking // keep + show the model's reasoning
+    const wantAutoCopy = analyze && !!job.fn.autoCopy // copy the result to the clipboard when done
+    const stream = analyze ? readAnalyze().stream : readTranslate().stream
+    const common = {
+      baseUrl: m.baseUrl,
+      apiKey: m.apiKey,
+      model: m.model,
+      dataUri,
+      system: analyze ? ANALYZE_SYSTEM : TRANSLATE_SYSTEM,
+      user: analyze ? job.fn.prompt.trim() || '分析这张图片的内容。' : '翻译图片里的文字。',
+      thinking: wantThinking
+    }
+    const failMsg = analyze ? '分析失败，请重试' : '翻译失败，请重试'
+    // reasoning is only surfaced when this job asked for thinking (translate never shows it)
+    const reason = (r: string): string | undefined => (wantThinking ? r : undefined)
+    // settle the result: optionally drop it on the clipboard, then tell the window (the non-stream
+    // path has no 'start', so it also attaches the original image here for 看原文).
+    const done = (answer: string, reasoning: string, withCrop: boolean): void => {
+      const copied = wantAutoCopy && !!answer
+      if (copied) clipboard.writeText(answer)
+      core.broadcast('capture.result', {
+        displayId,
+        phase: 'done',
+        text: answer,
+        reasoning: reason(reasoning),
+        copied,
+        ...(withCrop ? { cropDataUri: dataUri } : {})
       })
-      return { ok: true, markdown, cropDataUri: dataUri } // cropDataUri = the source image for 看原文
+    }
+    try {
+      if (stream) {
+        core.broadcast('capture.result', { displayId, phase: 'start', cropDataUri: dataUri })
+        const { answer, reasoning } = await chatVisionStream({
+          ...common,
+          onDelta: (a, r) => core.broadcast('capture.result', { displayId, phase: 'delta', text: a, reasoning: reason(r) })
+        })
+        done(answer, reasoning, false) // original already sent in 'start'
+        return { ok: true, markdown: answer, cropDataUri: dataUri }
+      }
+      const { answer, reasoning } = await chatVisionOnce(common)
+      done(answer, reasoning, true)
+      return { ok: true, markdown: answer, cropDataUri: dataUri }
     } catch (err) {
-      return { ok: false, error: err instanceof VisionError ? err.message : '翻译失败，请重试' }
+      const error = err instanceof VisionError ? err.message : failMsg
+      core.broadcast('capture.result', { displayId, phase: 'error', error })
+      return { ok: false, error }
     }
   })
 
-  // copy text to the clipboard (复制译文 — instant; translation is already in hand)
+  // copy text to the clipboard (复制译文 / 复制内容 — instant; the result is already in hand)
   core.commands.register('screenshotTranslate.copy', ({ text }) => {
     clipboard.writeText(text)
     return { ok: true }
@@ -228,20 +404,10 @@ export function registerScreenshotTranslate(core: AppCore, windows: WindowManage
     endCapture()
   })
 
-  // ---- 提取文本 / 公式 → clipboard, and the capability test ----
-  const setValidated = (v: boolean): void => {
-    core.store.mutate((db) => {
-      db.settings.screenshotTranslate = {
-        ...DEFAULT_SCREENSHOT_TRANSLATE,
-        ...db.settings.screenshotTranslate,
-        validated: v
-      }
-    })
-  }
-
+  // ---- 提取文本 / 公式 → clipboard (translate result helper; OCRs the cached crop) ----
   core.commands.register('screenshotTranslate.extract', async ({ kind, copy = true }) => {
     if (!lastCropDataUri) return { ok: false, error: '没有可提取的截图' }
-    const c = readConfig()
+    const m = readModel()
     const system =
       kind === 'formula'
         ? 'You are an OCR engine. Extract ONLY the mathematical formula(s) in the image as LaTeX. ' +
@@ -252,9 +418,9 @@ export function registerScreenshotTranslate(core: AppCore, windows: WindowManage
           'fences, no explanation.'
     try {
       const text = await chatVision({
-        baseUrl: c.baseUrl,
-        apiKey: c.apiKey,
-        model: c.model,
+        baseUrl: m.baseUrl,
+        apiKey: m.apiKey,
+        model: m.model,
         dataUri: lastCropDataUri,
         system,
         user: kind === 'formula' ? '提取图片中的公式为 LaTeX。' : '提取图片中的文字。'
@@ -266,37 +432,11 @@ export function registerScreenshotTranslate(core: AppCore, windows: WindowManage
     }
   })
 
-  core.commands.register('screenshotTranslate.testModel', async () => {
-    const c = readConfig()
-    if (!c.baseUrl || !c.model) return { ok: false, message: '请先填写 API 地址与模型名称' }
-    try {
-      const reply = await chatVision({
-        baseUrl: c.baseUrl,
-        apiKey: c.apiKey,
-        model: c.model,
-        dataUri: makeTestImage(),
-        system: 'You are a vision capability test. Look at the image and answer in ONE short word.',
-        user: 'What color is this image? Answer in one word.',
-        maxTokens: 256 // not 20: reasoning models can burn a tiny budget before any visible token
-      })
-      // any sensible, non-refusal reply means the model actually accepted the image
-      const refused = /cannot|can.?t|unable|no image|don.?t see|无法|不能|看不到|没有图/i.test(reply)
-      const ok = reply.trim().length > 0 && !refused
-      setValidated(ok)
-      return ok
-        ? { ok: true, message: '模型支持图片输入 ✓' }
-        : { ok: false, message: '该模型似乎不支持图片输入，请更换模型' }
-    } catch (err) {
-      setValidated(false)
-      return { ok: false, message: err instanceof VisionError ? err.message : '测试失败，请重试' }
-    }
-  })
-
   // if a capture window dies unexpectedly (Alt+F4, renderer crash, load failure) instead of via
   // capture.cancel, the session must still reset — otherwise `capturing` stays true and the hotkey
   // silently stops working until restart.
   windows.onCaptureGone = endCapture
 
-  syncShortcut() // pick up a saved shortcut on launch
+  syncShortcuts() // pick up saved shortcuts on launch (no-op until the model is validated)
   app.on('will-quit', () => globalShortcut.unregisterAll())
 }

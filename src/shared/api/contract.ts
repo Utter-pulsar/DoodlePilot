@@ -7,7 +7,9 @@ import type {
   Id,
   RecordItem,
   RecordWithLinks,
-  ScreenshotTranslateConfig
+  ScreenshotAnalyzeConfig,
+  ScreenshotTranslateConfig,
+  VisionModelConfig
 } from '../types'
 import type { BannerView, OverlayLayout } from '../types/overlay'
 
@@ -32,16 +34,21 @@ export type QueryMap = {
   'app.info': { input: void; result: { name: string; version: string; author: string } }
   'settings.get': { input: void; result: AppSettings }
   'window.isMaximized': { input: void; result: boolean }
-  // ---- screenshot translation ----
+  // ---- shared multimodal model + the two capture features ----
+  'visionModel.config': { input: void; result: VisionModelConfig }
   'screenshotTranslate.config': { input: void; result: ScreenshotTranslateConfig }
+  'screenshotAnalyze.config': { input: void; result: ScreenshotAnalyzeConfig }
   // a capture window asks for its own frozen screenshot frame + geometry (displayId from its ?d= query)
   // a capture window opens instantly and asks for its context. `frame` is null while the screenshot
   // is still in flight (it then arrives via the `capture.frame` event); if the screenshot already
   // finished before the window registered its listener, it's returned here — pull + push, no race.
+  // `mode` tells the window which result UI to show (translate buttons vs the analyze copy button).
   'capture.context': {
     input: { displayId: number }
     result: {
       theme: 'paper' | 'dark'
+      mode: 'translate' | 'analyze'
+      thinking: boolean // analyze job with 思考 on → the window always shows the (collapsible) block
       frame: { frameDataUri: string; frameW: number; frameH: number; scaleFactor: number } | null
     }
   }
@@ -134,6 +141,13 @@ export type CommandMap = {
   // `update.status` event (shown under the home title). Packaged Win/Linux only.
   'update.check': { input: void; result: void }
 
+  // ---- shared multimodal model (configured in 设置) ----
+  // deep-merge a patch into settings.visionModel; changing baseUrl/model/apiKey clears `validated`.
+  'visionModel.updateConfig': { input: { patch: Partial<VisionModelConfig> }; result: VisionModelConfig }
+  // send a tiny known test image to the configured model; pass ⇒ sets validated=true (re-registers
+  // every feature shortcut, which is gated on a validated model)
+  'visionModel.testModel': { input: void; result: { ok: boolean; message: string } }
+
   // ---- screenshot translation ----
   // deep-merge a patch into settings.screenshotTranslate (NOT settings.update — that's a shallow
   // merge that would clobber the nested object). Re-registers the global shortcut as a side effect.
@@ -141,8 +155,6 @@ export type CommandMap = {
     input: { patch: Partial<ScreenshotTranslateConfig> }
     result: ScreenshotTranslateConfig
   }
-  // send a tiny known test image to the configured model; pass ⇒ sets validated=true
-  'screenshotTranslate.testModel': { input: void; result: { ok: boolean; message: string } }
   // fire a capture as if the global shortcut was pressed (also used by the shortcut handler)
   'screenshotTranslate.trigger': { input: void; result: void }
   // OCR plain text / extract LaTeX from the active capture's cropped image → clipboard
@@ -150,6 +162,14 @@ export type CommandMap = {
     input: { kind: 'text' | 'formula'; copy?: boolean }
     result: { ok: boolean; text?: string; error?: string }
   }
+
+  // ---- screenshot analysis (custom prompts, same shared model) ----
+  'screenshotAnalyze.updateConfig': {
+    input: { patch: Partial<ScreenshotAnalyzeConfig> }
+    result: ScreenshotAnalyzeConfig
+  }
+  // fire a capture for ONE analysis function (by id); its prompt drives the model
+  'screenshotAnalyze.trigger': { input: { functionId: string }; result: void }
   // a capture window reports the user's selection rect (frozen-frame px); main crops + translates,
   // returning BOTH the translation markdown and the cropped source image (so "看原文" + "复制译文"
   // are instant, no re-querying the model)
@@ -171,6 +191,21 @@ export type EventMap = {
   'toast': { kind: 'info' | 'success' | 'error'; message: string }
   'window.maximized': boolean // main → renderer: the main window's maximized state changed
   'update.status': UpdateStatus // self-update progress (checking / downloading / installing / …)
+  // streaming capture result (翻译 OR 分析), pushed to the chosen capture window as the model emits
+  // tokens. 'start' carries the cropped original (so 看原文 works mid-stream); 'delta' carries the
+  // FULL markdown so far (idempotent — render as-is); 'done' the final markdown (and, when there was
+  // no 'start' i.e. non-streaming, the cropped original too); 'error' a friendly message.
+  'capture.result': {
+    displayId: number
+    phase: 'start' | 'delta' | 'done' | 'error'
+    text?: string
+    cropDataUri?: string
+    error?: string
+    // 截屏分析 only: the model's reasoning so far (shown as a collapsible block) when 思考 is on,
+    // and whether the finished result was auto-copied to the clipboard (for a confirmation toast).
+    reasoning?: string
+    copied?: boolean
+  }
   // pushed to each capture window once its display's frozen screenshot is ready (JPEG for fast
   // transfer/decode). frameW/frameH = actual pixels; scaleFactor = the display's DPI scale.
   'capture.frame': {
