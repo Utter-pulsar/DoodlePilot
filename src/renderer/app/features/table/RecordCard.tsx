@@ -4,6 +4,7 @@ import { DOODLE_PALETTE } from '@shared/constants'
 import { useStore } from '../../store'
 import { api } from '../../lib/bridge'
 import { DoodleBox } from '../../components/doodle/DoodleBox'
+import { useAutoGrow } from '../../lib/useAutoGrow'
 import { primaryField, statusOption, isDoneStatus, recordFields } from '../../lib/fields'
 
 const paletteHex = (token?: string): string => (token && DOODLE_PALETTE[token]) || '#FFD23F'
@@ -30,13 +31,10 @@ export function RecordCard({
   useEffect(() => {
     if (!focused.current) setDraft(titleValue)
   }, [titleValue])
-  // grow the title box to fit its wrapped text, so a long name shows in full (never clipped)
-  useEffect(() => {
-    const el = taRef.current
-    if (!el) return
-    el.style.height = 'auto'
-    el.style.height = `${el.scrollHeight}px`
-  }, [draft])
+  // grow the title box to fit its wrapped text, so a long name shows in full (never clipped) — and
+  // RE-fit when the lane is narrowed (useAutoGrow's ResizeObserver). A plain [draft] effect missed
+  // width changes, so a long one-line title stayed one line (clipped) instead of re-wrapping.
+  useAutoGrow(taRef, draft)
 
   if (!collection || !record) return null
 

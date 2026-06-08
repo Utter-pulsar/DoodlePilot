@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { AnimatePresence, motion } from 'framer-motion'
+import { AnimatePresence, motion, Reorder, useDragControls } from 'framer-motion'
 import rough from 'roughjs'
 import type {
   ChecklistItem,
@@ -28,6 +28,7 @@ import { DoodleCheckbox } from '../../components/doodle/DoodleCheckbox'
 
 const hex = (token?: string): string => (token && DOODLE_PALETTE[token]) || '#FFD23F'
 const inputCls = 'w-full rounded-[8px] border-2 border-ink bg-card px-2 py-1 outline-none'
+const sameSet = (a: Id[], b: Id[]): boolean => a.length === b.length && a.every((x) => b.includes(x))
 
 export function FieldEditor({
   collection,
@@ -323,29 +324,63 @@ function ChecklistEditor({
   const optOf = (id?: Id): SelectOption | undefined => options.find((o) => o.id === id)
   const isDone = (id?: Id): boolean => !!field.config?.doneOptionIds?.includes(id as Id)
 
+  // local optimistic item order (by id), so a drag-reorder isn't clobbered by the async store echo
+  // before it round-trips back — mirrors the lane / card / field reorder pattern.
+  const ids = items.map((it) => it.id)
+  const idsKey = ids.join(',')
+  const [order, setOrder] = useState<Id[]>(ids)
+  useEffect(() => {
+    setOrder((prev) => (sameSet(prev, ids) ? prev : ids))
+  }, [idsKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  const byId = new Map(items.map((it) => [it.id, it]))
+  // the items in the user's optimistic order. Appends any brand-new item the local `order` hasn't
+  // picked up yet (the one render before the effect resyncs) so a row can never vanish. EVERY commit
+  // below maps over `view`, so editing / cycling / deleting / adding all PRESERVE the dragged order
+  // instead of reverting to the store order (which the next echo would otherwise restore).
+  const view: ChecklistItem[] = [
+    ...order.map((id) => byId.get(id)).filter((x): x is ChecklistItem => !!x),
+    ...items.filter((it) => !order.includes(it.id))
+  ]
+
   // click the status chip to cycle 待办 → 进行中 → 已完成 → …
   const cycle = (it: ChecklistItem): void => {
     if (!options.length) return
     const i = options.findIndex((o) => o.id === it.status)
     const next = options[(i + 1) % options.length].id
-    onCommit(items.map((x) => (x.id === it.id ? { ...x, status: next } : x)))
+    onCommit(view.map((x) => (x.id === it.id ? { ...x, status: next } : x)))
+  }
+
+  // drag a row (by its status chip) to reorder; persist the new order
+  const onReorder = (newIds: Id[]): void => {
+    setOrder(newIds)
+    onCommit(newIds.map((id) => byId.get(id)).filter((x): x is ChecklistItem => !!x))
   }
 
   return (
     <div className="space-y-1">
-      {items.map((it) => (
-        <ChecklistItemRow
-          key={it.id}
-          item={it}
-          opt={optOf(it.status)}
-          done={isDone(it.status)}
-          onCycle={() => cycle(it)}
-          onChangeText={(text) => onCommit(items.map((x) => (x.id === it.id ? { ...x, text } : x)))}
-          onDelete={() => onCommit(items.filter((x) => x.id !== it.id))}
-        />
-      ))}
+      <Reorder.Group
+        axis="y"
+        values={view.map((it) => it.id)}
+        onReorder={onReorder}
+        as="div"
+        className="space-y-1"
+      >
+        {view.map((it) => (
+          <ChecklistItemRow
+            key={it.id}
+            item={it}
+            opt={optOf(it.status)}
+            done={isDone(it.status)}
+            onCycle={() => cycle(it)}
+            onChangeText={(text) =>
+              onCommit(view.map((x) => (x.id === it.id ? { ...x, text } : x)))
+            }
+            onDelete={() => onCommit(view.filter((x) => x.id !== it.id))}
+          />
+        ))}
+      </Reorder.Group>
       <button
-        onClick={() => onCommit([...items, { id: newId('ck'), text: '', status: options[0]?.id }])}
+        onClick={() => onCommit([...view, { id: newId('ck'), text: '', status: options[0]?.id }])}
         className="doodle-chip border-dashed"
       >
         ＋ 添加任务
@@ -378,6 +413,9 @@ function ChecklistItemRow({
   const [draft, setDraft] = useState(item.text)
   const focused = useRef(false)
   const ref = useRef<HTMLTextAreaElement>(null)
+  const controls = useDragControls()
+  // true once a real drag started this gesture, so the pointerup-click doesn't ALSO cycle the status
+  const dragged = useRef(false)
   // pull external edits in unless the user is actively typing in this row
   useEffect(() => {
     if (!focused.current) setDraft(item.text)
@@ -386,12 +424,34 @@ function ChecklistItemRow({
   useAutoGrow(ref, draft)
 
   return (
-    <div className="flex items-start gap-1">
+    <Reorder.Item
+      value={item.id}
+      dragListener={false}
+      dragControls={controls}
+      as="div"
+      // animate only position on reorder (rows vary in height as text wraps; animating size fights
+      // the auto-grow), and lift the dragged row above its neighbours
+      layout="position"
+      onDragStart={() => {
+        dragged.current = true
+      }}
+      whileDrag={{ zIndex: 10, boxShadow: '0 6px 14px rgba(0,0,0,0.18)' }}
+      className="flex items-start gap-1"
+    >
       <button
-        onClick={onCycle}
-        className="doodle-chip mt-0.5 shrink-0 text-[#2B2B2B]"
+        type="button"
+        // press + drag the chip to reorder; a plain click (no drag) still cycles the status
+        onPointerDown={(e) => {
+          dragged.current = false
+          controls.start(e)
+        }}
+        onClick={() => {
+          if (dragged.current) return
+          onCycle()
+        }}
+        className="doodle-chip mt-0.5 shrink-0 cursor-grab select-none text-[#2B2B2B] active:cursor-grabbing"
         style={{ backgroundColor: opt ? hex(opt.color) : 'transparent' }}
-        title="点击切换状态"
+        title="点击切换状态 · 按住可拖动排序"
       >
         {opt?.label ?? '状态'}
       </button>
@@ -415,7 +475,7 @@ function ChecklistItemRow({
       <button onClick={onDelete} className="mt-1.5 opacity-40 hover:opacity-100" title="删除任务">
         🗑️
       </button>
-    </div>
+    </Reorder.Item>
   )
 }
 
