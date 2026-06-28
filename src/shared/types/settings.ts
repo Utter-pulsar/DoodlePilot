@@ -12,6 +12,12 @@ export interface VisionModelConfig {
   validated: boolean
 }
 
+/** A saved multimodal-model preset. The user can keep several and load one into the ACTIVE config
+ *  (settings.visionModel) at a time via the 设置 dropdown. Identity is `id`; the label is `model`. */
+export interface SavedVisionModel extends VisionModelConfig {
+  id: string
+}
+
 /** 截屏翻译 feature config (the model lives in `VisionModelConfig` now). */
 export interface ScreenshotTranslateConfig {
   /** master on/off; only effective when the shared model is validated */
@@ -55,8 +61,13 @@ export interface AppSettings {
   runInBackground: boolean
   /** when true, DoodlePilot launches automatically at OS login (only applied in a packaged build) */
   launchAtLogin: boolean
-  /** shared multimodal model (configured in 设置). Backfilled on older DBs from screenshotTranslate. */
+  /** the ACTIVE multimodal model (mirror of the selected preset). Every vision feature reads this;
+   *  backfilled on older DBs from screenshotTranslate. */
   visionModel: VisionModelConfig
+  /** saved model presets the user switches between — the editable list. */
+  visionModelPresets: SavedVisionModel[]
+  /** id of the selected preset (the one shown/edited in 设置 and mirrored into visionModel). */
+  visionModelActiveId: string
   /** screenshot-translation feature config. */
   screenshotTranslate: ScreenshotTranslateConfig
   /** screenshot-analysis feature config. */
@@ -93,6 +104,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   runInBackground: false,
   launchAtLogin: false,
   visionModel: DEFAULT_VISION_MODEL,
+  visionModelPresets: [],
+  visionModelActiveId: '',
   screenshotTranslate: DEFAULT_SCREENSHOT_TRANSLATE,
   screenshotAnalyze: DEFAULT_SCREENSHOT_ANALYZE
 }

@@ -11,11 +11,12 @@ import type {
   RecordItem,
   SelectOption
 } from '@shared/types'
-import { newId } from '@shared/types'
+import { newId, isDailyDate } from '@shared/types'
 import { DOODLE_PALETTE, PALETTE_TOKENS } from '@shared/constants'
 import { useStore } from '../../store'
 import { api } from '../../lib/bridge'
 import { cssColor } from '../../lib/theme'
+import { isDailyKind } from '../../lib/fields'
 import { useAutoGrow } from '../../lib/useAutoGrow'
 import { DoodleNumber } from '../../components/doodle/DoodleNumber'
 import {
@@ -44,6 +45,12 @@ export function FieldEditor({
     void api.command('records.update', { id: record.id, fields: { [field.id]: v } })
   }
 
+  // a daily-task lane's title is a date/custom hybrid — pick a date (calendar) OR type a custom title.
+  // It renders its OWN label row (with the 选日期/自定义 toggle inline), so DrawerFieldRow hides the
+  // standard header for this field.
+  if (field.primary && isDailyKind(collection)) {
+    return <DailyTitleEditor label={field.name} value={typeof value === 'string' ? value : ''} onCommit={commit} />
+  }
   // the title field often holds a long name — let it WRAP and auto-grow here too (matching the
   // card title), instead of clipping to one line like a plain text input.
   if (field.primary) {
@@ -103,6 +110,67 @@ function TextArea({ value, onCommit }: { value: string; onCommit: (v: string) =>
       onChange={(e) => setDraft(e.target.value)}
       onBlur={() => onCommit(draft)}
     />
+  )
+}
+
+/**
+ * The daily-task title editor: switch between picking a DATE (hand-drawn calendar) and typing a
+ * CUSTOM title. A date commits as a UTC-midnight ISO (rendered "YYYY.MM.DD" on the card); a custom
+ * title commits as-is. This is the ONLY place a daily card's title can be edited (the card shows it
+ * read-only).
+ */
+function DailyTitleEditor({
+  label,
+  value,
+  onCommit
+}: {
+  label: string
+  value: string
+  onCommit: (v: string) => void
+}): JSX.Element {
+  const isDate = isDailyDate(value)
+  const [mode, setMode] = useState<'date' | 'custom'>(isDate || !value ? 'date' : 'custom')
+  // small pill toggles, sized to sit on the "日期" title row (DrawerFieldRow hides its own header
+  // for this field so this row IS the title row)
+  const tab = (active: boolean): string =>
+    `rounded-[6px] border-2 px-1.5 py-0 text-xs transition-colors ${
+      active
+        ? 'border-ink bg-marker-yellow text-[#2B2B2B]'
+        : 'border-dashed border-ink/50 opacity-60 hover:opacity-100'
+    }`
+  return (
+    <div className="space-y-2 font-doodle">
+      <div className="flex items-center gap-2 text-sm opacity-70">
+        <span>{label}</span>
+        <span title="标题字段">⭐</span>
+        <span className="ml-auto flex items-center gap-1">
+          <button type="button" onClick={() => setMode('date')} className={tab(mode === 'date')}>
+            📅 选日期
+          </button>
+          <button type="button" onClick={() => setMode('custom')} className={tab(mode === 'custom')}>
+            ✏️ 自定义
+          </button>
+        </span>
+      </div>
+      {mode === 'date' ? (
+        <DoodleDatePicker
+          value={isDate ? value : null}
+          onChange={(iso) => onCommit(iso ?? '')}
+          placeholder="选择日期"
+        />
+      ) : (
+        <input
+          autoFocus
+          className={inputCls}
+          defaultValue={isDate ? '' : value}
+          placeholder="自定义标题"
+          onBlur={(e) => onCommit(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') e.currentTarget.blur()
+          }}
+        />
+      )}
+    </div>
   )
 }
 
@@ -486,6 +554,22 @@ function RelationEditor({ record, field }: { record: RecordItem; field: FieldDef
   const [adding, setAdding] = useState(false)
 
   const linked = (record.fields[field.id] as Id[] | undefined) ?? []
+
+  // a "（历史）" mirror field is a frozen snapshot of archived links — read-only (no ＋关联 / ✕). It
+  // refills automatically when a linked record is archived, and empties when one is restored.
+  if (field.config?.historyOfFieldId) {
+    if (!linked.length) return <span className="text-sm opacity-40">暂无</span>
+    return (
+      <div className="flex flex-wrap gap-1">
+        {linked.map((id) => (
+          <span key={id} className="doodle-chip bg-card opacity-80">
+            📦 {titleOf(id)}
+          </span>
+        ))}
+      </div>
+    )
+  }
+
   const candidates = allRecords.filter(
     (r) => r.collectionId === targetId && !r.archived && !linked.includes(r.id)
   )

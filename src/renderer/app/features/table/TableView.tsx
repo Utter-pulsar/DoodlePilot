@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Reorder } from 'framer-motion'
+import { AnimatePresence, motion, Reorder } from 'framer-motion'
 import type { CollectionKind, FieldDef, Id } from '@shared/types'
 import { newId } from '@shared/types'
 import { useStore } from '../../store'
@@ -8,6 +8,7 @@ import { useElasticDrag } from '../../lib/useElasticDrag'
 import { useDoodleScrollbar } from '../../lib/useDoodleScrollbar'
 import { DoodleButton } from '../../components/doodle/DoodleButton'
 import { DoodleBox } from '../../components/doodle/DoodleBox'
+import { IconPicker } from '../../components/doodle/IconPicker'
 import { LaneColumn } from './LaneColumn'
 
 const sameSet = (a: Id[], b: Id[]): boolean =>
@@ -56,13 +57,31 @@ export function TableView(): JSX.Element {
         </Reorder.Group>
 
         <div className="w-64 shrink-0">
-          {creating ? (
-            <NewLaneForm onClose={() => setCreating(false)} />
-          ) : (
-            <DoodleButton variant="ghost" className="w-full border-dashed" onClick={() => setCreating(true)}>
-              ＋ 添加分类
-            </DoodleButton>
-          )}
+          {/* Q弹: the form springs in when opened and scales away when closed (mode=wait so the
+              button only returns after the form has finished collapsing) */}
+          <AnimatePresence initial={false} mode="wait">
+            {creating ? (
+              <motion.div
+                key="form"
+                initial={{ scale: 0.8, opacity: 0, y: 8 }}
+                animate={{ scale: 1, opacity: 1, y: 0 }}
+                exit={{ scale: 0.85, opacity: 0, y: 6 }}
+                transition={{ type: 'spring', stiffness: 380, damping: 15 }}
+              >
+                <NewLaneForm onClose={() => setCreating(false)} />
+              </motion.div>
+            ) : (
+              <motion.div key="btn" initial={false}>
+                <DoodleButton
+                  variant="ghost"
+                  className="w-full border-dashed"
+                  onClick={() => setCreating(true)}
+                >
+                  ＋ 添加分类
+                </DoodleButton>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       </div>
     </div>
@@ -71,7 +90,6 @@ export function TableView(): JSX.Element {
 
 const LANE_KINDS: { value: CollectionKind; label: string; icon: string }[] = [
   { value: 'generic', label: '普通分类', icon: '📄' },
-  { value: 'weeklyTasks', label: '每周任务', icon: '📅' },
   { value: 'dailyTasks', label: '每日任务（日期 + 任务清单）', icon: '🗓️' }
 ]
 
@@ -89,30 +107,44 @@ function templateFields(kind: CollectionKind): Omit<FieldDef, 'id'>[] {
       { name: '日期', type: 'text', primary: true },
       { name: '任务', type: 'checklist', config: statusConfig(), showOnCard: true }
     ]
-  if (kind === 'weeklyTasks')
-    return [
-      { name: '本周任务', type: 'text', primary: true },
-      { name: '状态', type: 'status', config: statusConfig() }
-    ]
   return []
 }
 
 function NewLaneForm({ onClose }: { onClose: () => void }): JSX.Element {
   const [name, setName] = useState('')
   const [kind, setKind] = useState<CollectionKind>('generic')
+  const [icon, setIcon] = useState(LANE_KINDS[0].icon)
+  const rootRef = useRef<HTMLDivElement>(null)
   const meta = LANE_KINDS.find((k) => k.value === kind) ?? LANE_KINDS[0]
+
+  // switching kind suggests that kind's default icon (the user can still override it)
+  const onKind = (next: CollectionKind): void => {
+    setKind(next)
+    setIcon(LANE_KINDS.find((k) => k.value === next)?.icon ?? '📄')
+  }
 
   const create = (): void => {
     void api.command('collections.create', {
       name: name.trim() || meta.label.replace(/（.*?）/, ''),
       kind,
-      icon: meta.icon,
+      icon: icon || '📄',
       fields: templateFields(kind)
     })
     onClose()
   }
 
+  // click anywhere outside the form cancels it (the IconPicker dropdown lives inside, so picking an
+  // emoji or its <select> doesn't dismiss the form)
+  useEffect(() => {
+    const onDown = (e: PointerEvent): void => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) onClose()
+    }
+    document.addEventListener('pointerdown', onDown, true)
+    return () => document.removeEventListener('pointerdown', onDown, true)
+  }, [onClose])
+
   return (
+    <div ref={rootRef}>
     <DoodleBox>
       <div className="space-y-2 p-3 font-doodle">
         <input
@@ -123,9 +155,10 @@ function NewLaneForm({ onClose }: { onClose: () => void }): JSX.Element {
           className="w-full rounded-[8px] border-2 border-ink bg-card px-2 py-1 outline-none"
           onKeyDown={(e) => e.key === 'Enter' && create()}
         />
+        <IconPicker value={icon} onChange={setIcon} />
         <select
           value={kind}
-          onChange={(e) => setKind(e.target.value as CollectionKind)}
+          onChange={(e) => onKind(e.target.value as CollectionKind)}
           className="w-full rounded-[8px] border-2 border-ink bg-card px-2 py-1"
         >
           {LANE_KINDS.map((k) => (
@@ -147,5 +180,6 @@ function NewLaneForm({ onClose }: { onClose: () => void }): JSX.Element {
         </div>
       </div>
     </DoodleBox>
+    </div>
   )
 }

@@ -3,7 +3,7 @@ import type { ChecklistItem, Collection, FieldDef, RecordItem, SelectOption } fr
 import type { Database } from './store'
 
 // Default content shown on first launch. It demonstrates the core ideas:
-//   - several customizable lanes (People / Projects / Weekly / Daily)
+//   - several customizable lanes (People / Projects / Daily)
 //   - two-way links (a project lists members; a person lists their projects)
 //   - daily tasks: one card = a day, holding a checklist of tasks each with a status
 //   - archiving a card moves it to a "<lane>-历史" lane (auto-created)
@@ -12,7 +12,7 @@ import type { Database } from './store'
 // The current schema version. seedDatabase() stamps it on brand-new installs; store.ts walks an
 // OLDER DB up to it via in-place `migrations` (it never wipes). When you change the data
 // structure, bump this AND add the matching migration step in store.ts.
-export const SEED_VERSION = 3
+export const SEED_VERSION = 4
 
 function status(label: string, color: string): SelectOption {
   return { id: newId('opt'), label, color }
@@ -24,7 +24,6 @@ export function seedDatabase(): Database {
   // --- collection ids (declared up front so fields can cross-reference) ---
   const peopleId = newId('col')
   const projectsId = newId('col')
-  const weeklyId = newId('col')
   const dailyId = newId('col')
 
   // --- shared status options (reused by status fields + the daily checklist) ---
@@ -81,25 +80,6 @@ export function seedDatabase(): Database {
     ...ts
   }
 
-  // --- Weekly tasks ---
-  const weekTitle: FieldDef = { id: newId('fld'), name: '本周任务', type: 'text', primary: true }
-  const weekStatus = mkStatusField()
-  const weekProject: FieldDef = {
-    id: newId('fld'),
-    name: '所属项目',
-    type: 'relation',
-    config: { targetCollectionId: projectsId }
-  }
-  const weekly: Collection = {
-    id: weeklyId,
-    name: '每周任务',
-    icon: '📅',
-    kind: 'weeklyTasks',
-    order: 2,
-    fields: [weekTitle, weekStatus, weekProject],
-    ...ts
-  }
-
   // --- Daily tasks: one card = a day; a checklist of tasks, each with its own status ---
   const dayDate: FieldDef = { id: newId('fld'), name: '日期', type: 'text', primary: true }
   const dayTasks: FieldDef = {
@@ -114,7 +94,7 @@ export function seedDatabase(): Database {
     name: '每日任务',
     icon: '🗓️',
     kind: 'dailyTasks',
-    order: 3,
+    order: 2,
     fields: [dayDate, dayTasks],
     ...ts
   }
@@ -172,7 +152,7 @@ export function seedDatabase(): Database {
 
   return {
     version: SEED_VERSION,
-    collections: [people, projects, weekly, daily],
+    collections: [people, projects, daily],
     records,
     alarms: [],
     settings: { ...DEFAULT_SETTINGS }

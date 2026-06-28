@@ -9,6 +9,7 @@ import type {
   RecordWithLinks,
   ScreenshotAnalyzeConfig,
   ScreenshotTranslateConfig,
+  SavedVisionModel,
   VisionModelConfig
 } from '../types'
 import type { BannerView, OverlayLayout } from '../types/overlay'
@@ -36,6 +37,8 @@ export type QueryMap = {
   'window.isMaximized': { input: void; result: boolean }
   // ---- shared multimodal model + the two capture features ----
   'visionModel.config': { input: void; result: VisionModelConfig }
+  // the saved model list + which one is selected (its fields mirror into visionModel)
+  'visionModel.presets': { input: void; result: { presets: SavedVisionModel[]; activeId: Id } }
   'screenshotTranslate.config': { input: void; result: ScreenshotTranslateConfig }
   'screenshotAnalyze.config': { input: void; result: ScreenshotAnalyzeConfig }
   // a capture window asks for its own frozen screenshot frame + geometry (displayId from its ?d= query)
@@ -147,6 +150,12 @@ export type CommandMap = {
   // send a tiny known test image to the configured model; pass ⇒ sets validated=true (re-registers
   // every feature shortcut, which is gated on a validated model)
   'visionModel.testModel': { input: void; result: { ok: boolean; message: string } }
+  // saved-model presets: add a fresh blank model (becomes selected) / select one / delete one. Editing
+  // the active config (visionModel.updateConfig) writes through to the selected preset. All return the
+  // updated list + the selected id.
+  'visionModel.addPreset': { input: void; result: { presets: SavedVisionModel[]; activeId: Id } }
+  'visionModel.selectPreset': { input: { id: Id }; result: { presets: SavedVisionModel[]; activeId: Id } }
+  'visionModel.deletePreset': { input: { id: Id }; result: { presets: SavedVisionModel[]; activeId: Id } }
 
   // ---- screenshot translation ----
   // deep-merge a patch into settings.screenshotTranslate (NOT settings.update — that's a shallow

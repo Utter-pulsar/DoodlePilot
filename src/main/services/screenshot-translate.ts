@@ -3,15 +3,18 @@ import type { Display, NativeImage } from 'electron'
 import {
   DEFAULT_SCREENSHOT_ANALYZE,
   DEFAULT_SCREENSHOT_TRANSLATE,
-  DEFAULT_VISION_MODEL
+  DEFAULT_VISION_MODEL,
+  newId
 } from '@shared/types'
 import type {
   AnalysisFunction,
+  SavedVisionModel,
   ScreenshotAnalyzeConfig,
   ScreenshotTranslateConfig,
   VisionModelConfig
 } from '@shared/types'
 import type { AppCore } from './context'
+import type { Database } from './store'
 import type { WindowManager } from '../windows/window-manager'
 import { chatVision, chatVisionOnce, chatVisionStream, VisionError } from './vision-client'
 
@@ -214,7 +217,64 @@ export function registerScreenshotTranslate(core: AppCore, windows: WindowManage
   }
 
   // ---- shared multimodal model config (lives in 设置) ----
+  // The saved presets are the editable list; the SELECTED one (visionModelActiveId) mirrors into
+  // settings.visionModel, which every feature reads. Editing the form edits the selected preset.
+  const readPresets = (): SavedVisionModel[] =>
+    Array.isArray(core.store.data.settings.visionModelPresets)
+      ? core.store.data.settings.visionModelPresets
+      : []
+  const presetResult = (): { presets: SavedVisionModel[]; activeId: string } => ({
+    presets: readPresets(),
+    activeId: core.store.data.settings.visionModelActiveId ?? ''
+  })
+  const blankPreset = (): SavedVisionModel => ({
+    id: newId('vm'),
+    baseUrl: DEFAULT_VISION_MODEL.baseUrl,
+    apiKey: '',
+    model: '',
+    validated: false
+  })
+  // copy the selected preset's fields into settings.visionModel (the config features read)
+  const mirrorActive = (db: Database): void => {
+    const list = Array.isArray(db.settings.visionModelPresets) ? db.settings.visionModelPresets : []
+    const active = list.find((p) => p.id === db.settings.visionModelActiveId)
+    if (active) {
+      db.settings.visionModel = {
+        baseUrl: active.baseUrl,
+        apiKey: active.apiKey,
+        model: active.model,
+        validated: active.validated
+      }
+    }
+  }
+
+  // bootstrap once: guarantee ≥1 preset and a valid selection, migrating a legacy single visionModel
+  // into the first preset. Idempotent — only writes when something is actually missing.
+  ;(function ensurePresets(): void {
+    const db = core.store.data
+    let list = Array.isArray(db.settings.visionModelPresets) ? db.settings.visionModelPresets : []
+    let dirty = false
+    if (list.length === 0) {
+      const vm = { ...DEFAULT_VISION_MODEL, ...db.settings.visionModel }
+      list = [{ id: newId('vm'), baseUrl: vm.baseUrl, apiKey: vm.apiKey, model: vm.model, validated: vm.validated }]
+      dirty = true
+    }
+    let aid = db.settings.visionModelActiveId
+    if (!aid || !list.some((p) => p.id === aid)) {
+      aid = list[0].id
+      dirty = true
+    }
+    if (dirty) {
+      core.store.mutate((d) => {
+        d.settings.visionModelPresets = list
+        d.settings.visionModelActiveId = aid
+        mirrorActive(d)
+      })
+    }
+  })()
+
   core.queries.register('visionModel.config', () => readModel())
+  core.queries.register('visionModel.presets', () => presetResult())
 
   core.commands.register('visionModel.updateConfig', ({ patch }) => {
     core.store.mutate((db) => {
@@ -228,6 +288,14 @@ export function registerScreenshotTranslate(core: AppCore, windows: WindowManage
         (patch.apiKey !== undefined && patch.apiKey !== prev.apiKey)
       if (modelChanged && !('validated' in patch)) next.validated = false
       db.settings.visionModel = next
+      // write the edit THROUGH to the selected preset, so the saved list reflects it
+      const active = readPresets().find((p) => p.id === db.settings.visionModelActiveId)
+      if (active) {
+        active.baseUrl = next.baseUrl
+        active.apiKey = next.apiKey
+        active.model = next.model
+        active.validated = next.validated
+      }
     })
     syncShortcuts() // validated may have flipped → re-gate every feature's shortcut
     return readModel()
@@ -236,8 +304,53 @@ export function registerScreenshotTranslate(core: AppCore, windows: WindowManage
   const setValidated = (v: boolean): void => {
     core.store.mutate((db) => {
       db.settings.visionModel = { ...DEFAULT_VISION_MODEL, ...db.settings.visionModel, validated: v }
+      const active = readPresets().find((p) => p.id === db.settings.visionModelActiveId)
+      if (active) active.validated = v
     })
   }
+
+  // add a fresh BLANK model and select it (the form then shows empty fields ready to fill)
+  core.commands.register('visionModel.addPreset', () => {
+    core.store.mutate((db) => {
+      const list = Array.isArray(db.settings.visionModelPresets) ? db.settings.visionModelPresets : []
+      const preset = blankPreset()
+      list.push(preset)
+      db.settings.visionModelPresets = list
+      db.settings.visionModelActiveId = preset.id
+      mirrorActive(db)
+    })
+    syncShortcuts()
+    return presetResult()
+  })
+
+  // select an existing preset → its fields become the active config (and the form shows them)
+  core.commands.register('visionModel.selectPreset', ({ id }) => {
+    core.store.mutate((db) => {
+      if (readPresets().some((p) => p.id === id)) {
+        db.settings.visionModelActiveId = id
+        mirrorActive(db)
+      }
+    })
+    syncShortcuts()
+    return presetResult()
+  })
+
+  // delete a preset; never leave the list empty (re-seed a blank), and keep a valid selection
+  core.commands.register('visionModel.deletePreset', ({ id }) => {
+    core.store.mutate((db) => {
+      let list = (Array.isArray(db.settings.visionModelPresets) ? db.settings.visionModelPresets : []).filter(
+        (p) => p.id !== id
+      )
+      if (list.length === 0) list = [blankPreset()]
+      db.settings.visionModelPresets = list
+      if (!list.some((p) => p.id === db.settings.visionModelActiveId)) {
+        db.settings.visionModelActiveId = list[0].id
+      }
+      mirrorActive(db)
+    })
+    syncShortcuts()
+    return presetResult()
+  })
 
   core.commands.register('visionModel.testModel', async () => {
     const m = readModel()

@@ -39,6 +39,14 @@ export interface FieldConfig {
   targetCollectionId?: Id
   /** relation: optional field on the target collection that mirrors this link */
   reverseFieldId?: Id
+  /** relation: the auto-created "…（历史）" mirror field that collects this link's ARCHIVED
+   *  targets (set on the LIVE field). When a linked record is archived its id moves from this
+   *  field into the mirror; restoring moves it back. */
+  historyFieldId?: Id
+  /** relation: set on the MIRROR field — points back at the LIVE field it shadows. Its mere
+   *  presence marks a field as a frozen "（历史）" mirror, so the two-way sync engine + the startup
+   *  backfill skip it (never materialize a reverse / never re-sync a mirror's frozen links). */
+  historyOfFieldId?: Id
 }
 
 export interface FieldDef {
@@ -61,7 +69,6 @@ export type CollectionKind =
   | 'generic'
   | 'projects'
   | 'people'
-  | 'weeklyTasks'
   | 'dailyTasks'
   | 'archive'
 
@@ -74,6 +81,15 @@ export interface Collection extends Timestamped {
   fields: FieldDef[]
   /** lane width in px (user-resizable); falls back to a default when unset */
   width?: number
+  /** for a 'archive' (history) lane: the `kind` of the source lane it archives. Lets the
+   *  每日任务-历史 lane (sourceKind === 'dailyTasks') light up its calendar view. */
+  sourceKind?: CollectionKind
+  /** 每日任务-历史 calendar filter: day keys ('YYYY-MM-DD') whose cards are HIDDEN. Empty/unset =
+   *  all days shown. Persisted via collections.update. */
+  hiddenDays?: string[]
+  /** 每日任务-历史 calendar filter: hide ALL custom-title cards (those whose title is not a date, so
+   *  they have no calendar day to toggle). Independent of hiddenDays. */
+  hideCustom?: boolean
 }
 
 export interface DateRangeValue {

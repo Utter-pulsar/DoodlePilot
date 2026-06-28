@@ -57,6 +57,22 @@ const migrations: Record<number, Migration> = {
     delete st.apiKey
     delete st.model
     delete st.validated
+  },
+  // 4: 每周任务 (weeklyTasks) is gone — any such lane degrades to a plain 'generic' lane (its fields
+  // and records are kept). Also backfill `sourceKind` on existing history ('archive') lanes by
+  // matching the live lane whose name is theirs minus the "-历史" suffix, so the 每日任务-历史 lane
+  // can light up its calendar view. The 'weeklyTasks' literal is gone from the type, so compare the
+  // raw stored string.
+  4: (db) => {
+    for (const c of db.collections) {
+      if ((c.kind as string) === 'weeklyTasks') c.kind = 'generic'
+    }
+    for (const c of db.collections) {
+      if (c.kind !== 'archive' || c.sourceKind) continue
+      const sourceName = c.name.replace(/-历史$/, '')
+      const source = db.collections.find((x) => x.name === sourceName && x.kind !== 'archive')
+      if (source) c.sourceKind = source.kind
+    }
   }
 }
 

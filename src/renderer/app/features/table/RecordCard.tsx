@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ChecklistItem, DateRangeValue, FieldDef, Id, RecordItem } from '@shared/types'
+import { formatDailyDate } from '@shared/types'
 import { DOODLE_PALETTE } from '@shared/constants'
 import { useStore } from '../../store'
 import { api } from '../../lib/bridge'
 import { DoodleBox } from '../../components/doodle/DoodleBox'
 import { useAutoGrow } from '../../lib/useAutoGrow'
-import { primaryField, statusOption, isDoneStatus, recordFields } from '../../lib/fields'
+import { primaryField, statusOption, isDoneStatus, recordFields, isDailyKind } from '../../lib/fields'
 
 const paletteHex = (token?: string): string => (token && DOODLE_PALETTE[token]) || '#FFD23F'
 const stop = (e: { stopPropagation: () => void }): void => e.stopPropagation()
@@ -56,6 +57,9 @@ export function RecordCard({
 
   const opt = statusOption(collection, record)
   const done = isDoneStatus(collection, record)
+  // daily-task lanes (and their history): the title is a date/custom hybrid, shown read-only here —
+  // it can only be changed in the detail drawer (pick a date or type a custom title)
+  const daily = isDailyKind(collection)
   // fields shown on the collapsed card (status is already shown above). A field is visible if this
   // card's per-card override says so, else it follows the lane default (showOnCard).
   const cardVisible = (f: FieldDef): boolean => {
@@ -80,33 +84,41 @@ export function RecordCard({
     >
       <DoodleBox className="font-doodle" fill={done ? '--card-done' : '--card'}>
         <div className="space-y-2 p-3">
-          <textarea
-            ref={taRef}
-            rows={1}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onFocus={() => {
-              focused.current = true
-            }}
-            onBlur={() => {
-              focused.current = false
-              commitTitle()
-            }}
-            onClick={stop}
-            // Enter commits + blurs (no newline) — the title is one value that just WRAPS to show
-            // in full, instead of being clipped to one line like the old <input>.
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault()
-                e.currentTarget.blur()
-              }
-            }}
-            // stop the pointer from reaching the card's framer drag-listener, otherwise the
-            // whole-card reorder swallows the click and the textarea never focuses (can't type)
-            onPointerDown={(e) => e.stopPropagation()}
-            placeholder="写点什么…"
-            className={`w-full resize-none overflow-hidden break-words bg-transparent text-base leading-snug outline-none ${done ? 'line-through opacity-60' : ''}`}
-          />
+          {daily ? (
+            // read-only date/custom title; tap the card (handled by the outer onClick) to edit it in
+            // the drawer. A date renders "YYYY.MM.DD"; a custom title shows as-is.
+            <div className={`break-words text-base font-bold leading-snug ${done ? 'line-through opacity-60' : ''}`}>
+              {formatDailyDate(titleValue) || <span className="font-normal opacity-40">未设置日期</span>}
+            </div>
+          ) : (
+            <textarea
+              ref={taRef}
+              rows={1}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onFocus={() => {
+                focused.current = true
+              }}
+              onBlur={() => {
+                focused.current = false
+                commitTitle()
+              }}
+              onClick={stop}
+              // Enter commits + blurs (no newline) — the title is one value that just WRAPS to show
+              // in full, instead of being clipped to one line like the old <input>.
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  e.currentTarget.blur()
+                }
+              }}
+              // stop the pointer from reaching the card's framer drag-listener, otherwise the
+              // whole-card reorder swallows the click and the textarea never focuses (can't type)
+              onPointerDown={(e) => e.stopPropagation()}
+              placeholder="写点什么…"
+              className={`w-full resize-none overflow-hidden break-words bg-transparent text-base leading-snug outline-none ${done ? 'line-through opacity-60' : ''}`}
+            />
+          )}
 
           {opt && (
             <div className="flex flex-wrap items-center gap-1">

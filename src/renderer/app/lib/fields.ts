@@ -4,6 +4,12 @@ export function primaryField(col: Collection): FieldDef | undefined {
   return col.fields.find((f) => f.primary) ?? col.fields.find((f) => f.type === 'text')
 }
 
+/** A daily-task lane OR its 每日任务-历史 archive lane — where the title is a date/custom hybrid and
+ *  the card title is display-only (edited only in the drawer). */
+export function isDailyKind(col: Collection): boolean {
+  return col.kind === 'dailyTasks' || (col.kind === 'archive' && col.sourceKind === 'dailyTasks')
+}
+
 export function titleOfRecord(col: Collection | undefined, rec: RecordItem | undefined): string {
   if (!col || !rec) return '—'
   const pf = primaryField(col)

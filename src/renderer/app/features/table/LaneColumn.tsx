@@ -1,11 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
-import { Reorder, useDragControls } from 'framer-motion'
-import type { Id } from '@shared/types'
+import { AnimatePresence, motion, Reorder, useDragControls } from 'framer-motion'
+import rough from 'roughjs'
+import type { Collection, Id, RecordItem } from '@shared/types'
+import { dailyDayKey } from '@shared/types'
 import { useStore } from '../../store'
 import { api } from '../../lib/bridge'
+import { cssColor } from '../../lib/theme'
 import { useDoodleScrollbar } from '../../lib/useDoodleScrollbar'
+import { primaryField } from '../../lib/fields'
 import { DoodleButton } from '../../components/doodle/DoodleButton'
+import { DoodleBox } from '../../components/doodle/DoodleBox'
+import { IconPicker } from '../../components/doodle/IconPicker'
 import { RecordCard } from './RecordCard'
+import { DailyHistoryCalendar } from './DailyHistoryCalendar'
 
 const DEFAULT_WIDTH = 288
 const MIN_WIDTH = 220
@@ -16,6 +23,29 @@ const DAMP = 0.72
 
 const sameSet = (a: Id[], b: Id[]): boolean => a.length === b.length && a.every((x) => b.includes(x))
 const clampW = (w: number): number => Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, w))
+
+/** The 每日任务-历史 lane's calendar button: the doodle-font character「历」inside a hand-drawn
+ *  (roughjs) ring that signals "this is a button". Sized ~ an emoji so it sits inline with the
+ *  ✏️ / 🗑️ header icons, and the ring redraws on a theme flip. */
+function DoodleCalIcon(): JSX.Element {
+  const ref = useRef<SVGSVGElement>(null)
+  const theme = useStore((s) => s.theme)
+  useEffect(() => {
+    const svg = ref.current
+    if (!svg) return
+    svg.innerHTML = ''
+    const rc = rough.svg(svg)
+    svg.appendChild(
+      rc.circle(16, 16, 29, { roughness: 1, stroke: cssColor('--ink'), strokeWidth: 1.5, seed: 11 })
+    )
+  }, [theme])
+  return (
+    <span className="relative inline-flex h-7 w-7 items-center justify-center">
+      <svg ref={ref} viewBox="0 0 32 32" className="pointer-events-none absolute inset-0 h-full w-full" />
+      <span className="relative font-doodle text-[13px] font-bold leading-none">历</span>
+    </span>
+  )
+}
 
 export function LaneColumn({
   collectionId,
@@ -37,6 +67,8 @@ export function LaneColumn({
   const listRef = useRef<HTMLDivElement>(null)
   useDoodleScrollbar(listRef, 'y')
   const [order, setOrder] = useState<Id[]>([])
+  const [editing, setEditing] = useState(false) // lane name + icon editor open
+  const [calOpen, setCalOpen] = useState(false) // 每日任务-历史 calendar modal open
 
   useEffect(() => {
     if (collection?.width && collection.width !== widthRef.current && raf.current === undefined) {
@@ -51,9 +83,25 @@ export function LaneColumn({
   // history ("…-历史") lanes read newest-first: a card's `order` grows as it's archived, so the
   // most recent one (highest order) sits on top. Normal lanes stay oldest-first (ascending).
   const isArchive = collection?.kind === 'archive'
-  const records = allRecords
-    .filter((r) => r.collectionId === collectionId && !r.archived)
-    .sort((a, b) => (isArchive ? b.order - a.order : a.order - b.order))
+  // the 每日任务-历史 lane: always-on calendar. The ONLY thing the calendar does is HIDE whole days —
+  // it never reorders. Cards keep the normal archive order (earlier-archived lower, later on top), so
+  // dated and custom-title cards interleave by when they were archived, and hiding/showing a day
+  // leaves the survivors' order untouched.
+  const isDailyHistory = isArchive && collection?.sourceKind === 'dailyTasks'
+  const pf = collection ? primaryField(collection) : undefined
+  const hiddenSet = new Set(collection?.hiddenDays ?? [])
+  const dayKeyOf = (r: RecordItem): string | null => (pf ? dailyDayKey(r.fields[pf.id]) : null)
+
+  let records = allRecords.filter((r) => r.collectionId === collectionId && !r.archived)
+  if (isDailyHistory) {
+    const hideCustom = !!collection?.hideCustom
+    records = records.filter((r) => {
+      const k = dayKeyOf(r)
+      if (k) return !hiddenSet.has(k) // dated card → hidden iff its day is hidden
+      return !hideCustom // custom-title card → hidden iff "隐藏所有自定义" is on
+    })
+  }
+  records = records.sort((a, b) => (isArchive ? b.order - a.order : a.order - b.order))
   const recordIds = records.map((r) => r.id)
   const idsKey = recordIds.join(',')
 
@@ -78,12 +126,6 @@ export function LaneColumn({
     })
   }
 
-  const rename = async (): Promise<void> => {
-    const name = await useStore.getState().askPrompt('重命名分类', collection.name)
-    if (name && name !== collection.name) {
-      void api.command('collections.update', { id: collectionId, patch: { name } })
-    }
-  }
   const remove = async (): Promise<void> => {
     const ok = await useStore.getState().askConfirm(`删除「${collection.name}」整列？其中的记录会一并删除。`)
     if (ok) void api.command('collections.delete', { id: collectionId })
@@ -147,26 +189,39 @@ export function LaneColumn({
       style={{ width }}
       className="relative flex h-full shrink-0 flex-col"
     >
-      <header className="mb-2 flex items-center gap-2">
-        {/* drag handle (springy reorder starts here) */}
-        <span
-          onPointerDown={(e) => controls.start(e)}
-          className="flex flex-1 cursor-grab items-center gap-2 rounded-[8px] px-1 py-1 hover:bg-ink/5 active:cursor-grabbing"
-          title="拖动可换位"
-        >
-          <span className="text-xl">{collection.icon ?? '📄'}</span>
-          <h2 className="font-doodle text-lg font-bold">{collection.name}</h2>
-          <span className="rounded-full border-2 border-ink/40 px-2 text-sm opacity-60">
-            {records.length}
+      {editing ? (
+        <LaneHeaderEditor collection={collection} onClose={() => setEditing(false)} />
+      ) : (
+        <header className="mb-2 flex items-center gap-2">
+          {/* drag handle (springy reorder starts here) */}
+          <span
+            onPointerDown={(e) => controls.start(e)}
+            className="flex flex-1 cursor-grab items-center gap-2 rounded-[8px] px-1 py-1 hover:bg-ink/5 active:cursor-grabbing"
+            title="拖动可换位"
+          >
+            <span className="text-xl">{collection.icon ?? '📄'}</span>
+            <h2 className="font-doodle text-lg font-bold">{collection.name}</h2>
+            <span className="rounded-full border-2 border-ink/40 px-2 text-sm opacity-60">
+              {records.length}
+            </span>
           </span>
-        </span>
-        <button className="opacity-40 hover:opacity-100" title="重命名" onClick={rename}>
-          ✏️
-        </button>
-        <button className="opacity-40 hover:opacity-100" title="删除该列" onClick={remove}>
-          🗑️
-        </button>
-      </header>
+          {isDailyHistory && (
+            <button
+              className="shrink-0 opacity-60 hover:opacity-100"
+              title="日历"
+              onClick={() => setCalOpen(true)}
+            >
+              <DoodleCalIcon />
+            </button>
+          )}
+          <button className="opacity-40 hover:opacity-100" title="重命名 / 改图标" onClick={() => setEditing(true)}>
+            ✏️
+          </button>
+          <button className="opacity-40 hover:opacity-100" title="删除该列" onClick={remove}>
+            🗑️
+          </button>
+        </header>
+      )}
 
       <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto pr-3">
         <Reorder.Group
@@ -176,9 +231,19 @@ export function LaneColumn({
           as="div"
           className="space-y-3"
         >
-          {visibleRecordIds.map((id, i) => (
-            <SortableCard key={id} collectionId={collectionId} recordId={id} index={i} />
-          ))}
+          {isDailyHistory ? (
+            // wrap in AnimatePresence so hiding/showing a day springs the cards in/out (Q弹), while
+            // the survivors keep their archive order (layout="position" springs them into place)
+            <AnimatePresence initial={false}>
+              {visibleRecordIds.map((id, i) => (
+                <SortableCard key={id} collectionId={collectionId} recordId={id} index={i} bouncy />
+              ))}
+            </AnimatePresence>
+          ) : (
+            visibleRecordIds.map((id, i) => (
+              <SortableCard key={id} collectionId={collectionId} recordId={id} index={i} />
+            ))
+          )}
         </Reorder.Group>
         <DoodleButton
           variant="ghost"
@@ -198,6 +263,10 @@ export function LaneColumn({
         className="absolute -right-2 top-0 z-50 h-full w-3 cursor-col-resize"
         title="拖动调整列宽"
       />
+
+      {isDailyHistory && (
+        <DailyHistoryCalendar collectionId={collectionId} open={calOpen} onClose={() => setCalOpen(false)} />
+      )}
     </Reorder.Item>
   )
 }
@@ -209,11 +278,15 @@ export function LaneColumn({
 function SortableCard({
   collectionId,
   recordId,
-  index
+  index,
+  bouncy = false
 }: {
   collectionId: Id
   recordId: Id
   index: number
+  /** daily-history lane: fade the card on enter/exit (show/hide a day) and pop it via an INNER
+   *  scale spring — scale on the layout item itself fights framer's transforms (see note below). */
+  bouncy?: boolean
 }): JSX.Element {
   // theme-aware lift shadow (light ink is invisible on a dark board, and vice versa)
   const theme = useStore((s) => s.theme)
@@ -232,8 +305,79 @@ function SortableCard({
       // shadow. Lift via non-transform props only (shadow + z).
       whileDrag={{ zIndex: 20, boxShadow: dragShadow }}
       transition={{ type: 'spring', stiffness: 600, damping: 30 }}
+      {...(bouncy
+        ? { initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0, transition: { duration: 0.15 } } }
+        : {})}
     >
-      <RecordCard collectionId={collectionId} recordId={recordId} />
+      {bouncy ? (
+        <motion.div
+          initial={{ scale: 0.8 }}
+          animate={{ scale: 1 }}
+          transition={{ type: 'spring', stiffness: 500, damping: 14 }}
+        >
+          <RecordCard collectionId={collectionId} recordId={recordId} />
+        </motion.div>
+      ) : (
+        <RecordCard collectionId={collectionId} recordId={recordId} />
+      )}
     </Reorder.Item>
+  )
+}
+
+/** Inline editor for a lane's name + icon (replaces the header while open). Saves via the existing
+ *  collections.update command. Hand-drawn DoodleBox, matching the new-lane form. */
+function LaneHeaderEditor({
+  collection,
+  onClose
+}: {
+  collection: Collection
+  onClose: () => void
+}): JSX.Element {
+  const [name, setName] = useState(collection.name)
+  const [icon, setIcon] = useState(collection.icon ?? '📄')
+  const rootRef = useRef<HTMLDivElement>(null)
+  const save = (): void => {
+    void api.command('collections.update', {
+      id: collection.id,
+      patch: { name: name.trim() || collection.name, icon: icon || '📄' }
+    })
+    onClose()
+  }
+  // click anywhere outside the editor cancels it (the IconPicker dropdown is inside, so picking an
+  // emoji doesn't dismiss the form)
+  useEffect(() => {
+    const onDown = (e: PointerEvent): void => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) onClose()
+    }
+    document.addEventListener('pointerdown', onDown, true)
+    return () => document.removeEventListener('pointerdown', onDown, true)
+  }, [onClose])
+  return (
+    <div ref={rootRef} className="mb-2">
+      <DoodleBox fill="--card" fillStyle="solid">
+        <div className="space-y-2 p-2 font-doodle">
+          <input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="分类名称"
+            className="w-full rounded-[8px] border-2 border-ink bg-card px-2 py-1 outline-none"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') save()
+              if (e.key === 'Escape') onClose()
+            }}
+          />
+          <IconPicker value={icon} onChange={setIcon} />
+          <div className="flex gap-2">
+            <DoodleButton variant="primary" onClick={save}>
+              保存
+            </DoodleButton>
+            <DoodleButton variant="ghost" onClick={onClose}>
+              取消
+            </DoodleButton>
+          </div>
+        </div>
+      </DoodleBox>
+    </div>
   )
 }

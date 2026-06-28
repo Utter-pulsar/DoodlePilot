@@ -4,7 +4,7 @@ import type { Collection, FieldDef, FieldType, Id, RecordItem } from '@shared/ty
 import { useStore } from '../../store'
 import { api } from '../../lib/bridge'
 import { useDoodleScrollbar } from '../../lib/useDoodleScrollbar'
-import { recordFields } from '../../lib/fields'
+import { recordFields, isDailyKind } from '../../lib/fields'
 import { DoodleButton } from '../../components/doodle/DoodleButton'
 import { FieldEditor } from './FieldEditor'
 
@@ -280,9 +280,13 @@ function DrawerFieldRow({
   // effective card-visibility for THIS card: per-card override, else the lane default
   const ov = record.cardFieldVisible?.[field.id]
   const effVisible = ov === undefined ? !!field.showOnCard : ov
+  // the daily-task title field renders its own label row (with the 选日期/自定义 toggle inline), so we
+  // skip the standard property header for it
+  const dailyTitle = !!field.primary && isDailyKind(collection)
 
   const body = (
     <>
+      {!dailyTitle && (
       <div className="mb-1 flex items-center gap-2 text-sm opacity-70">
         {draggable ? (
           <span
@@ -346,6 +350,7 @@ function DrawerFieldRow({
           )}
         </span>
       </div>
+      )}
       {/* key by record id: switching cards must remount the editor so its local draft (TextArea /
           uncontrolled input) re-initialises from the NEW record — otherwise it keeps showing the
           first-selected card's text */}
