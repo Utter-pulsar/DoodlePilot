@@ -65,7 +65,10 @@ export function TableView(): JSX.Element {
                 key="form"
                 initial={{ scale: 0.8, opacity: 0, y: 8 }}
                 animate={{ scale: 1, opacity: 1, y: 0 }}
-                exit={{ scale: 0.85, opacity: 0, y: 6 }}
+                // open with the Q弹 spring, but CLOSE with a clean tween fade. A spring on
+                // `opacity` overshoots (dips past 0 then rebounds to a small positive value), and
+                // that rebound flashes the box for a frame on cancel/blur — a tween just fades out.
+                exit={{ scale: 0.96, opacity: 0, transition: { duration: 0.14, ease: 'easeOut' } }}
                 transition={{ type: 'spring', stiffness: 380, damping: 15 }}
               >
                 <NewLaneForm onClose={() => setCreating(false)} />

@@ -504,7 +504,9 @@ function ChecklistItemRow({
         dragged.current = true
       }}
       whileDrag={{ zIndex: 10, boxShadow: '0 6px 14px rgba(0,0,0,0.18)' }}
-      className="flex items-start gap-1"
+      // `relative` so whileDrag's zIndex applies (z-index is a no-op on a static element),
+      // keeping the row you're dragging above the ones it passes
+      className="relative flex items-start gap-1"
     >
       <button
         type="button"

@@ -272,10 +272,38 @@ export function registerCollectionService(core: AppCore): void {
     for (const r of db.records) {
       const col = findCollection(db, r.collectionId)
       if (!col) continue
+      // Skip archived records: their live relation fields are a FROZEN snapshot (kept so restore
+      // can rebuild the links). Re-syncing them here would re-materialize the reverse onto the
+      // linking card's LIVE field — resurrecting a link that archive had moved into its "（历史）"
+      // mirror, so it shows in BOTH the current and history buckets after a reload.
+      if (col.kind === 'archive') continue
       for (const f of col.fields) {
         if (!isRelationField(f) || isMirrorField(f)) continue // never re-sync a frozen mirror
         const vals = asIdArray(r.fields[f.id])
         if (vals.length && syncReverse(db, col, f, r.id, [], vals)) dirty = true
+      }
+    }
+    // 2b) heal DBs already corrupted by the pre-fix backfill: an id historized into a "（历史）"
+    // mirror must NOT also sit in the live field it shadows (live ⇄ mirror are mutually exclusive —
+    // archive moves an id from one to the other, restore moves it back). Drop any such duplicate
+    // from the live side so the link shows only under history. Never touches the mirror or the
+    // archived record's own frozen links, so restore keeps working.
+    for (const r of db.records) {
+      const col = findCollection(db, r.collectionId)
+      if (!col) continue
+      for (const mf of col.fields) {
+        if (!isMirrorField(mf)) continue
+        const liveId = mf.config?.historyOfFieldId
+        if (!liveId) continue
+        const mirrored = asIdArray(r.fields[mf.id])
+        if (!mirrored.length) continue
+        const live = asIdArray(r.fields[liveId])
+        const cleaned = live.filter((id) => !mirrored.includes(id))
+        if (cleaned.length !== live.length) {
+          r.fields[liveId] = cleaned
+          r.updatedAt = nowISO()
+          dirty = true
+        }
       }
     }
     // 3) collapse PLAIN fields a lane accidentally duplicated (the pre-fix addField minted a fresh

@@ -299,7 +299,11 @@ function SortableCard({
       // animate only on card reorder (index change), not on lane-resize width changes
       layout="position"
       layoutDependency={index}
-      className="cursor-grab active:cursor-grabbing"
+      // `relative` is REQUIRED for whileDrag's zIndex to take effect — z-index is ignored on a
+      // statically-positioned element. Without it the dragged card stays at the default layer and,
+      // because the reorder rewrites DOM order live, the card it passes (later in the DOM) paints
+      // on top. With position:relative the zIndex:20 below actually lifts the dragged card.
+      className="relative cursor-grab active:cursor-grabbing"
       // NOTE: no `scale` here — animating scale on a `layout` element fights framer's
       // transform corrections and leaves a residual transform (clips an edge) + a stuck
       // shadow. Lift via non-transform props only (shadow + z).
