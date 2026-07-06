@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import type { AppSettings, SavedVisionModel, VisionModelConfig } from '@shared/types'
+import type { AppSettings, SavedVisionModel, VisionModelConfig, VisionProtocol } from '@shared/types'
+import { detectVisionProtocol, defaultBaseUrlFor, KNOWN_DEFAULT_BASE_URLS } from '@shared/types'
 import { api } from '../lib/bridge'
 import { DialogShell } from './DialogShell'
 import { DoodleToggle } from './doodle/DoodleToggle'
@@ -50,6 +51,14 @@ function ModelSection(): JSX.Element {
       void refreshPresets() // the edited model's label in the dropdown follows
     })
   }
+  // switching wire format: if the URL is still an untouched default (or empty), swap it to the new
+  // format's default in the same write — so an Anthropic model doesn't keep the OpenAI URL.
+  const switchProtocol = (next: VisionProtocol): void => {
+    if (!cfg) return // config not loaded yet — don't clobber the stored URL with a default
+    const cur = cfg.baseUrl.trim()
+    const isDefault = cur === '' || KNOWN_DEFAULT_BASE_URLS.includes(cur)
+    update(isDefault ? { protocol: next, baseUrl: defaultBaseUrlFor(next) } : { protocol: next })
+  }
   const test = async (): Promise<void> => {
     setTesting(true)
     setTestMsg(null)
@@ -62,6 +71,9 @@ function ModelSection(): JSX.Element {
     }
   }
   const canTest = !testing && !!cfg?.baseUrl && !!cfg?.model
+  // the effective wire format shown in the selector: the saved value, or a best-effort guess from the
+  // endpoint shape (sk-ant key / claude model / …) for presets saved before this field existed.
+  const protocol: VisionProtocol = cfg ? detectVisionProtocol(cfg) : 'openai'
 
   // ---- presets: selecting shows that model's fields; 添加 makes a fresh blank model ----
   const applyPresetResult = async (r: {
@@ -142,7 +154,7 @@ function ModelSection(): JSX.Element {
                     className="flex items-center gap-1 rounded-[8px] border-2 border-ink bg-card px-2 py-0.5 text-xs"
                     title="选择 / 管理已保存的模型"
                   >
-                    <span className="max-w-[120px] truncate">{cfg?.model || '选择模型'}</span>
+                    <span className="max-w-[120px] truncate">{cfg?.label || cfg?.model || '选择模型'}</span>
                     <span className="opacity-50">▾</span>
                   </button>
                   <AnimatePresence>
@@ -169,9 +181,9 @@ function ModelSection(): JSX.Element {
                                 type="button"
                                 onClick={() => selectPreset(p.id)}
                                 className="min-w-0 flex-1 truncate py-1 text-left text-sm"
-                                title={`${p.model || '（未命名）'}\n${p.baseUrl}`}
+                                title={`${p.label || p.model || '（未命名）'}${p.label && p.model ? `（${p.model}）` : ''}\n${p.baseUrl}`}
                               >
-                                {p.model || '未命名'}
+                                {p.label || p.model || '未命名'}
                                 {p.validated && <span className="text-marker-green"> ✓</span>}
                               </button>
                               <button
@@ -198,11 +210,57 @@ function ModelSection(): JSX.Element {
                 </div>
               </div>
 
-              <span className="mt-1 text-sm opacity-70">模型 API 地址（OpenAI 格式）</span>
+              {/* a per-preset display name, independent of the model name — so two keys for the same
+                  model ("公司 Claude" / "个人 Claude") are distinguishable in the dropdown. */}
+              <span className="mt-1 text-sm opacity-70">名称（可选）</span>
+              <input
+                className={fieldCls}
+                value={cfg?.label ?? ''}
+                placeholder="给这个 API Key 起个名字"
+                onChange={(e) => setLocal({ label: e.target.value })}
+                onBlur={(e) => update({ label: e.target.value.trim() })}
+              />
+
+              {/* wire format. Switching re-gates the model (a different endpoint), so 已验证 clears
+                  until 测试模型能力 passes again, and — if the URL is still an untouched default —
+                  the base URL swaps to that format's default. */}
+              <span className="mt-1 text-sm opacity-70">接口格式</span>
+              <div className="flex gap-1">
+                {(
+                  [
+                    { v: 'openai', label: 'OpenAI' },
+                    { v: 'openai-responses', label: 'OpenAI Responses' },
+                    { v: 'anthropic', label: 'Anthropic' }
+                  ] as Array<{ v: VisionProtocol; label: string }>
+                ).map((opt) => {
+                  const active = protocol === opt.v
+                  return (
+                    <button
+                      key={opt.v}
+                      type="button"
+                      onClick={() => switchProtocol(opt.v)}
+                      className={`flex-1 rounded-[8px] border-2 border-ink px-1.5 py-1 text-[11px] leading-tight transition ${
+                        active ? 'bg-marker-yellow/60' : 'bg-card hover:bg-marker-yellow/20'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  )
+                })}
+              </div>
+              {protocol === 'openai-responses' && (
+                <span className="text-xs text-marker-blue">
+                  用于 Codex / GPT‑5 代理：这类接口只在 Responses API 下识别图片
+                </span>
+              )}
+
+              <span className="mt-1 text-sm opacity-70">
+                模型 API 地址（{protocol === 'anthropic' ? 'Anthropic' : 'OpenAI'} 格式）
+              </span>
               <input
                 className={fieldCls}
                 value={cfg?.baseUrl ?? ''}
-                placeholder="https://api.openai.com/v1"
+                placeholder={defaultBaseUrlFor(protocol)}
                 onChange={(e) => setLocal({ baseUrl: e.target.value })}
                 onBlur={(e) => update({ baseUrl: e.target.value.trim() })}
               />

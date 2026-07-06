@@ -16,7 +16,7 @@ import type {
 import type { AppCore } from './context'
 import type { Database } from './store'
 import type { WindowManager } from '../windows/window-manager'
-import { chatVision, chatVisionOnce, chatVisionStream, VisionError } from './vision-client'
+import { chatVision, chatVisionOnce, chatVisionStream, isAbortError, VisionError } from './vision-client'
 
 interface CaptureEntry {
   display: Display
@@ -146,8 +146,18 @@ export function registerScreenshotTranslate(core: AppCore, windows: WindowManage
   const frames = new Map<number, CaptureEntry>()
   let lastCropDataUri: string | null = null // the chosen crop, re-used by 提取文本/公式
   let pendingJob: CaptureJob = { kind: 'translate' } // what capture.selectRegion should run
+  // the in-flight model call for the current box. Re-selecting/resizing/retrying (a NEW requestId)
+  // or closing the box aborts it, so a superseded stream stops delivering tokens instead of leaking
+  // into the next box. `requestId` is the renderer-minted id we tag every capture.result with.
+  let activeRequest: { requestId: string; abort: AbortController } | null = null
+
+  const abortActiveRequest = (): void => {
+    activeRequest?.abort.abort()
+    activeRequest = null
+  }
 
   const endCapture = (): void => {
+    abortActiveRequest()
     windows.closeCaptureWindows()
     frames.clear()
     lastCropDataUri = null
@@ -232,6 +242,8 @@ export function registerScreenshotTranslate(core: AppCore, windows: WindowManage
     baseUrl: DEFAULT_VISION_MODEL.baseUrl,
     apiKey: '',
     model: '',
+    label: '',
+    protocol: 'openai',
     validated: false
   })
   // copy the selected preset's fields into settings.visionModel (the config features read)
@@ -243,6 +255,8 @@ export function registerScreenshotTranslate(core: AppCore, windows: WindowManage
         baseUrl: active.baseUrl,
         apiKey: active.apiKey,
         model: active.model,
+        label: active.label ?? '',
+        protocol: active.protocol ?? 'openai',
         validated: active.validated
       }
     }
@@ -256,7 +270,17 @@ export function registerScreenshotTranslate(core: AppCore, windows: WindowManage
     let dirty = false
     if (list.length === 0) {
       const vm = { ...DEFAULT_VISION_MODEL, ...db.settings.visionModel }
-      list = [{ id: newId('vm'), baseUrl: vm.baseUrl, apiKey: vm.apiKey, model: vm.model, validated: vm.validated }]
+      list = [
+        {
+          id: newId('vm'),
+          baseUrl: vm.baseUrl,
+          apiKey: vm.apiKey,
+          model: vm.model,
+          label: vm.label ?? '',
+          protocol: vm.protocol ?? 'openai',
+          validated: vm.validated
+        }
+      ]
       dirty = true
     }
     let aid = db.settings.visionModelActiveId
@@ -281,11 +305,15 @@ export function registerScreenshotTranslate(core: AppCore, windows: WindowManage
       const prev = { ...DEFAULT_VISION_MODEL, ...db.settings.visionModel }
       const next: VisionModelConfig = { ...prev, ...patch }
       // changing the model identity invalidates a prior capability check — but ONLY when the value
-      // actually changed, so a no-op blur (focus-out with the same text) doesn't silently un-validate
+      // actually changed, so a no-op blur (focus-out with the same text) doesn't silently un-validate.
+      // The wire format counts as identity too (an OpenAI-vs-Anthropic switch is a different endpoint).
+      // the label is cosmetic (it's not a request field), so it never counts as a model change and
+      // never clears 已验证 — renaming a validated preset keeps it validated.
       const modelChanged =
         (patch.baseUrl !== undefined && patch.baseUrl !== prev.baseUrl) ||
         (patch.model !== undefined && patch.model !== prev.model) ||
-        (patch.apiKey !== undefined && patch.apiKey !== prev.apiKey)
+        (patch.apiKey !== undefined && patch.apiKey !== prev.apiKey) ||
+        (patch.protocol !== undefined && patch.protocol !== prev.protocol)
       if (modelChanged && !('validated' in patch)) next.validated = false
       db.settings.visionModel = next
       // write the edit THROUGH to the selected preset, so the saved list reflects it
@@ -294,6 +322,8 @@ export function registerScreenshotTranslate(core: AppCore, windows: WindowManage
         active.baseUrl = next.baseUrl
         active.apiKey = next.apiKey
         active.model = next.model
+        active.label = next.label ?? ''
+        active.protocol = next.protocol ?? 'openai'
         active.validated = next.validated
       }
     })
@@ -360,6 +390,7 @@ export function registerScreenshotTranslate(core: AppCore, windows: WindowManage
         baseUrl: m.baseUrl,
         apiKey: m.apiKey,
         model: m.model,
+        protocol: m.protocol, // honour the user's 接口格式 choice — detection can't identify every relay
         dataUri: makeTestImage(),
         system: 'You are a vision capability test. Look at the image and answer in ONE short word.',
         user: 'What color is this image? Answer in one word.',
@@ -446,12 +477,20 @@ export function registerScreenshotTranslate(core: AppCore, windows: WindowManage
   // the result); close the others. Streaming per the feature's `stream` flag — the window flips to its
   // result view on 'start' (carrying the original for 看原文) and re-renders on each 'delta'; a
   // non-streaming run stays in the loading state and shows the whole result on 'done'.
-  core.commands.register('capture.selectRegion', async ({ displayId, rect }) => {
+  core.commands.register('capture.selectRegion', async ({ displayId, rect, requestId }) => {
     const e = frames.get(displayId)
     if (!e) {
       endCapture()
-      return { ok: false, error: '截图已失效，请重试' }
+      return { ok: false, error: '截图已失效，请重试', requestId }
     }
+    // supersede any prior in-flight call for this box (re-select / resize / retry). Aborting stops the
+    // old stream from delivering more tokens into the window we're about to repaint.
+    abortActiveRequest()
+    const abort = new AbortController()
+    activeRequest = { requestId, abort }
+    // only the CURRENT request may paint — a late callback from a superseded/aborted run is dropped.
+    const isCurrent = (): boolean => activeRequest?.requestId === requestId
+
     const dataUri = cropToDataUri(e.image, rect)
     lastCropDataUri = dataUri
     windows.keepOnlyCaptureWindow(displayId)
@@ -465,10 +504,12 @@ export function registerScreenshotTranslate(core: AppCore, windows: WindowManage
       baseUrl: m.baseUrl,
       apiKey: m.apiKey,
       model: m.model,
+      protocol: m.protocol,
       dataUri,
       system: analyze ? ANALYZE_SYSTEM : TRANSLATE_SYSTEM,
       user: analyze ? job.fn.prompt.trim() || '分析这张图片的内容。' : '翻译图片里的文字。',
-      thinking: wantThinking
+      thinking: wantThinking,
+      signal: abort.signal
     }
     const failMsg = analyze ? '分析失败，请重试' : '翻译失败，请重试'
     // reasoning is only surfaced when this job asked for thinking (translate never shows it)
@@ -476,34 +517,45 @@ export function registerScreenshotTranslate(core: AppCore, windows: WindowManage
     // settle the result: optionally drop it on the clipboard, then tell the window (the non-stream
     // path has no 'start', so it also attaches the original image here for 看原文).
     const done = (answer: string, reasoning: string, withCrop: boolean): void => {
+      if (!isCurrent()) return
       const copied = wantAutoCopy && !!answer
       if (copied) clipboard.writeText(answer)
       core.broadcast('capture.result', {
         displayId,
+        requestId,
         phase: 'done',
         text: answer,
         reasoning: reason(reasoning),
         copied,
         ...(withCrop ? { cropDataUri: dataUri } : {})
       })
+      activeRequest = null
     }
     try {
       if (stream) {
-        core.broadcast('capture.result', { displayId, phase: 'start', cropDataUri: dataUri })
+        core.broadcast('capture.result', { displayId, requestId, phase: 'start', cropDataUri: dataUri })
         const { answer, reasoning } = await chatVisionStream({
           ...common,
-          onDelta: (a, r) => core.broadcast('capture.result', { displayId, phase: 'delta', text: a, reasoning: reason(r) })
+          onDelta: (a, r) => {
+            if (isCurrent()) {
+              core.broadcast('capture.result', { displayId, requestId, phase: 'delta', text: a, reasoning: reason(r) })
+            }
+          }
         })
         done(answer, reasoning, false) // original already sent in 'start'
-        return { ok: true, markdown: answer, cropDataUri: dataUri }
+        return { ok: true, markdown: answer, cropDataUri: dataUri, requestId }
       }
       const { answer, reasoning } = await chatVisionOnce(common)
       done(answer, reasoning, true)
-      return { ok: true, markdown: answer, cropDataUri: dataUri }
+      return { ok: true, markdown: answer, cropDataUri: dataUri, requestId }
     } catch (err) {
+      // a deliberate abort (superseded by a newer request, or the box was closed) is not a failure —
+      // stay silent so it can't flash an error over the new box or a torn-down window.
+      if (isAbortError(err) || !isCurrent()) return { ok: false, error: '已取消', requestId }
       const error = err instanceof VisionError ? err.message : failMsg
-      core.broadcast('capture.result', { displayId, phase: 'error', error })
-      return { ok: false, error }
+      core.broadcast('capture.result', { displayId, requestId, phase: 'error', error })
+      activeRequest = null
+      return { ok: false, error, requestId }
     }
   })
 
@@ -534,6 +586,7 @@ export function registerScreenshotTranslate(core: AppCore, windows: WindowManage
         baseUrl: m.baseUrl,
         apiKey: m.apiKey,
         model: m.model,
+        protocol: m.protocol,
         dataUri: lastCropDataUri,
         system,
         user: kind === 'formula' ? '提取图片中的公式为 LaTeX。' : '提取图片中的文字。'

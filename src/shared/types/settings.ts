@@ -1,6 +1,13 @@
-/** Shared OpenAI-compatible multimodal model config. Configured ONCE in 设置 and reused by every
- *  feature that needs vision (截屏翻译, 截屏分析, …). `validated` is the single gate: a feature can
- *  only be enabled when the model has passed 测试模型能力; changing any field clears it. */
+/** Which wire format the model endpoint speaks.
+ *  - `openai` = /v1/chat/completions (default; OpenAI, vLLM, Ollama, most gateways)
+ *  - `openai-responses` = /v1/responses (OpenAI Responses API; the shape Codex / GPT‑5 proxies use —
+ *    some of them ONLY forward images through this endpoint, not chat-completions)
+ *  - `anthropic` = /v1/messages (Claude models + relays) */
+export type VisionProtocol = 'openai' | 'openai-responses' | 'anthropic'
+
+/** Shared multimodal model config. Configured ONCE in 设置 and reused by every feature that needs
+ *  vision (截屏翻译, 截屏分析, …). `validated` is the single gate: a feature can only be enabled when
+ *  the model has passed 测试模型能力; changing any field clears it. */
 export interface VisionModelConfig {
   /** API base, e.g. https://api.openai.com/v1 (a trailing slash and/or a missing /v1 are tolerated) */
   baseUrl: string
@@ -8,8 +15,49 @@ export interface VisionModelConfig {
   apiKey: string
   /** the multimodal model name, e.g. gpt-4o-mini */
   model: string
+  /** a user-chosen display name for this preset, INDEPENDENT of the model name (e.g. "公司 Claude").
+   *  Cosmetic — shown in the 设置 dropdown; falls back to the model name when empty. */
+  label?: string
+  /** wire format — OpenAI chat-completions / OpenAI responses / Anthropic messages. Defaults to
+   *  'openai' on older DBs. */
+  protocol?: VisionProtocol
   /** true only after 测试模型能力 confirms the model accepts images — gates every vision feature */
   validated: boolean
+}
+
+/** The suggested API base for a wire format — used to prefill the field and to swap it when the user
+ *  flips 接口格式 while the URL is still a default (a hand-typed URL is left alone). */
+export function defaultBaseUrlFor(protocol: VisionProtocol): string {
+  return protocol === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.openai.com/v1'
+}
+
+/** Every known default base URL (across protocols) — a URL equal to one of these is "untouched" and
+ *  safe to replace when the protocol changes. */
+export const KNOWN_DEFAULT_BASE_URLS: readonly string[] = [
+  'https://api.openai.com/v1',
+  'https://api.anthropic.com'
+]
+
+/** Best-effort guess of the wire format from the endpoint's shape, used when `protocol` is unset:
+ *  an Anthropic key (sk-ant…), a claude model name, or an /messages URL imply Anthropic; a codex
+ *  model or a /responses URL implies the OpenAI Responses API. */
+export function detectVisionProtocol(cfg: {
+  baseUrl?: string
+  apiKey?: string
+  model?: string
+  protocol?: VisionProtocol
+}): VisionProtocol {
+  if (cfg.protocol === 'anthropic' || cfg.protocol === 'openai' || cfg.protocol === 'openai-responses') {
+    return cfg.protocol
+  }
+  const url = (cfg.baseUrl ?? '').toLowerCase()
+  const key = (cfg.apiKey ?? '').toLowerCase()
+  const model = (cfg.model ?? '').toLowerCase()
+  if (key.startsWith('sk-ant') || /anthropic|\/messages\b/.test(url) || /^claude/.test(model)) {
+    return 'anthropic'
+  }
+  if (/\/responses\b/.test(url) || /codex/.test(model)) return 'openai-responses'
+  return 'openai'
 }
 
 /** A saved multimodal-model preset. The user can keep several and load one into the ACTIVE config
@@ -78,6 +126,7 @@ export const DEFAULT_VISION_MODEL: VisionModelConfig = {
   baseUrl: 'https://api.openai.com/v1',
   apiKey: '',
   model: '',
+  protocol: 'openai',
   validated: false
 }
 

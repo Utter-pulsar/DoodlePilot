@@ -182,9 +182,16 @@ export type CommandMap = {
   // a capture window reports the user's selection rect (frozen-frame px); main crops + translates,
   // returning BOTH the translation markdown and the cropped source image (so "看原文" + "复制译文"
   // are instant, no re-querying the model)
+  // `requestId` (minted by the capture window) tags this run so the window can ignore results from a
+  // superseded run — re-selecting/resizing/retrying issues a new id, and the main process aborts the
+  // previous in-flight model call so a stale stream can't keep painting the box.
   'capture.selectRegion': {
-    input: { displayId: number; rect: { x: number; y: number; w: number; h: number } }
-    result: { ok: boolean; markdown?: string; cropDataUri?: string; error?: string }
+    input: {
+      displayId: number
+      rect: { x: number; y: number; w: number; h: number }
+      requestId: string
+    }
+    result: { ok: boolean; markdown?: string; cropDataUri?: string; error?: string; requestId?: string }
   }
   // copy arbitrary text to the clipboard from the capture window (used by 复制译文 — instant)
   'screenshotTranslate.copy': { input: { text: string }; result: { ok: boolean } }
@@ -206,6 +213,9 @@ export type EventMap = {
   // no 'start' i.e. non-streaming, the cropped original too); 'error' a friendly message.
   'capture.result': {
     displayId: number
+    // which selectRegion run this belongs to — the window drops events whose id != its current run,
+    // so a superseded/aborted stream can never overwrite a freshly re-selected box.
+    requestId: string
     phase: 'start' | 'delta' | 'done' | 'error'
     text?: string
     cropDataUri?: string
