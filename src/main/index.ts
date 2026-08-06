@@ -10,6 +10,7 @@ import { registerAlarmService } from './services/alarm-service'
 import { registerScreenshotTranslate } from './services/screenshot-translate'
 import { Scheduler } from './services/scheduler'
 import { registerUpdater } from './services/updater'
+import { registerBoardTransferService } from './services/board-transfer-service'
 import { WindowManager } from './windows/window-manager'
 import { registerIpc } from './ipc/register-ipc'
 import { registerIntegrations } from './integrations'
@@ -45,6 +46,7 @@ app.whenReady().then(async () => {
   // services register their query/command handlers on the core registries
   registerCollectionService(core)
   registerAlarmService(core)
+  registerBoardTransferService(core)
   registerUpdater(core) // self-update query/commands + "install only on accept" policy
 
   // windows must exist before events are emitted so broadcast can deliver them

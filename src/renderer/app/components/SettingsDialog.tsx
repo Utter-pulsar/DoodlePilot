@@ -3,6 +3,8 @@ import { AnimatePresence, motion } from 'framer-motion'
 import type { AppSettings, SavedVisionModel, VisionModelConfig, VisionProtocol } from '@shared/types'
 import { detectVisionProtocol, defaultBaseUrlFor, KNOWN_DEFAULT_BASE_URLS } from '@shared/types'
 import { api } from '../lib/bridge'
+import { useStore } from '../store'
+import { BoardDataImportDialog } from './BoardDataImportDialog'
 import { DialogShell } from './DialogShell'
 import { DoodleToggle } from './doodle/DoodleToggle'
 import { DoodleButton } from './doodle/DoodleButton'
@@ -344,6 +346,9 @@ export function SettingsDialog({
   onClose: () => void
 }): JSX.Element {
   const [settings, setSettings] = useState<AppSettings | null>(null)
+  const [exporting, setExporting] = useState(false)
+  const [exportMsg, setExportMsg] = useState('')
+  const [importOpen, setImportOpen] = useState(false)
 
   useEffect(() => {
     if (open) void api.query('settings.get', undefined).then(setSettings)
@@ -354,8 +359,32 @@ export function SettingsDialog({
     void api.command('settings.update', { patch }).then(setSettings)
   }
 
+  const exportBoard = async (): Promise<void> => {
+    setExporting(true)
+    setExportMsg('')
+    try {
+      const r = await api.command('board.exportData', undefined)
+      if (r.canceled) setExportMsg('已取消导出')
+      else if (r.ok) setExportMsg(`已导出 ${r.collections} 个分类、${r.records} 张卡片`)
+    } catch (err) {
+      setExportMsg(err instanceof Error ? err.message : '导出失败，请重试')
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const openImport = async (): Promise<void> => {
+    const { collections, records, askConfirm } = useStore.getState()
+    if (collections.length > 0 || records.length > 0) {
+      const ok = await askConfirm('导入会覆盖当前项目看板中的所有分类、卡片和历史数据，闹钟与设置不会改变。继续吗？')
+      if (!ok) return
+    }
+    setImportOpen(true)
+  }
+
   return (
-    <DialogShell open={open} onClose={onClose} title="设置">
+    <>
+      <DialogShell open={open} onClose={onClose} title="设置">
       <SettingRow label="关闭后保持后台运行" hint="点关闭只把窗口收进系统托盘，程序继续运行">
         <DoodleToggle
           label="关闭后保持后台运行"
@@ -374,6 +403,18 @@ export function SettingsDialog({
 
       <ModelSection />
 
+      <SettingRow label="项目看板数据" hint="导出 / 导入所有分类、卡片、历史列和关联；不会包含闹钟与设置">
+        <div className="flex shrink-0 gap-2">
+          <DoodleButton disabled={exporting} onClick={() => void exportBoard()}>
+            {exporting ? '导出中…' : '导出数据'}
+          </DoodleButton>
+          <DoodleButton variant="primary" onClick={() => void openImport()}>
+            导入数据
+          </DoodleButton>
+        </div>
+      </SettingRow>
+      {exportMsg && <div className="-mt-2 text-right text-xs opacity-60">{exportMsg}</div>}
+
       <button
         onClick={onClose}
         className="mx-auto mt-2 block rounded-[8px] border-2 border-ink px-5 py-1 text-base hover:bg-marker-yellow/40"
@@ -381,5 +422,7 @@ export function SettingsDialog({
         好的
       </button>
     </DialogShell>
+    <BoardDataImportDialog open={importOpen} onClose={() => setImportOpen(false)} />
+  </>
   )
 }

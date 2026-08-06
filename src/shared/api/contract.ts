@@ -10,7 +10,10 @@ import type {
   ScreenshotAnalyzeConfig,
   ScreenshotTranslateConfig,
   SavedVisionModel,
-  VisionModelConfig
+  VisionModelConfig,
+  BoardExportFile,
+  BoardExportResult,
+  BoardImportResult
 } from '../types'
 import type { BannerView, OverlayLayout } from '../types/overlay'
 
@@ -138,6 +141,10 @@ export type CommandMap = {
   // The main process applies side effects (tray for runInBackground, OS login item for
   // launchAtLogin) before returning.
   'settings.update': { input: { patch: Partial<AppSettings> }; result: AppSettings }
+
+  // ---- project board import / export ----
+  'board.exportData': { input: void; result: BoardExportResult }
+  'board.importData': { input: { payload: BoardExportFile }; result: BoardImportResult }
 
   // ---- app self-update (electron-updater) ----
   // manual, fully-automatic: check → download → install → relaunch. Progress arrives via the
